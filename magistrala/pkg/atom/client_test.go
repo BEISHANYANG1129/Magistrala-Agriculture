@@ -1,0 +1,768 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package atom
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestUpsertResourceCreatesThenUpdatesOnConflict(t *testing.T) {
+	var operations []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		payload := string(body)
+		switch {
+		case strings.Contains(payload, "createResource"):
+			operations = append(operations, "createResource")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"errors": []map[string]string{{"message": "duplicate key value violates unique constraint"}},
+			})
+			return
+		case strings.Contains(payload, "updateResource"):
+			operations = append(operations, "updateResource")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"updateResource": map[string]any{"id": "res-1", "kind": KindChannel, "name": "ch"},
+				},
+			})
+			return
+		default:
+			t.Fatalf("unexpected GraphQL payload: %s", payload)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	if err := client.UpsertResource(context.Background(), Resource{ID: "res-1", Kind: KindChannel, Name: "ch"}); err != nil {
+		t.Fatalf("upsert failed: %v", err)
+	}
+
+	want := []string{"createResource", "updateResource"}
+	if len(operations) != len(want) {
+		t.Fatalf("unexpected operation count: got %v want %v", operations, want)
+	}
+	for i := range want {
+		if operations[i] != want[i] {
+			t.Fatalf("unexpected operations: got %v want %v", operations, want)
+		}
+	}
+}
+
+func TestListResources(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.Variables["kind"] != KindRule || payload.Variables["tenantId"] != testWorkspaceID {
+			t.Fatalf("unexpected variables: %+v", payload.Variables)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"resources": map[string]any{
+					"items": []Resource{{ID: "rule-1", Kind: KindRule, Name: "high-temp"}},
+					"total": 1,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	got, err := client.ListResources(context.Background(), Query{Kind: KindRule, TenantID: testWorkspaceID})
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if got.Total != 1 || got.Items[0].ID != "rule-1" {
+		t.Fatalf("unexpected list: %+v", got)
+	}
+}
+
+func TestListEntitiesAttributesContains(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !strings.Contains(payload.Query, "$attributesContains: JSON") || !strings.Contains(payload.Query, "attributesContains: $attributesContains") {
+			t.Fatalf("query does not declare/pass attributesContains: %s", payload.Query)
+		}
+		contains, ok := payload.Variables["attributesContains"].(map[string]any)
+		if !ok {
+			t.Fatalf("attributesContains was not sent on the wire: %+v", payload.Variables)
+		}
+		gateways, _ := contains["gateways"].([]any)
+
+		// Only entities matching the requested containment are returned.
+		items := []Entity{}
+		if len(gateways) == 1 && gateways[0] == "gw-1" {
+			items = append(items, Entity{ID: "device-1", Kind: atomKindDevice})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"entities": map[string]any{"items": items, "total": len(items)},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+
+	got, err := client.ListEntities(context.Background(), Query{
+		AttributesContains: map[string]any{"gateways": []string{"gw-1"}},
+	})
+	if err != nil {
+		t.Fatalf("list entities failed: %v", err)
+	}
+	if got.Total != 1 || len(got.Items) != 1 || got.Items[0].ID != "device-1" {
+		t.Fatalf("unexpected filtered list: %+v", got)
+	}
+
+	miss, err := client.ListEntities(context.Background(), Query{
+		AttributesContains: map[string]any{"gateways": []string{"gw-2"}},
+	})
+	if err != nil {
+		t.Fatalf("list entities failed: %v", err)
+	}
+	if miss.Total != 0 || len(miss.Items) != 0 {
+		t.Fatalf("expected no matches for a non-satisfying containment, got: %+v", miss)
+	}
+}
+
+func TestCurrentAtomCompatibilitySurface(t *testing.T) {
+	const (
+		serviceToken = "service-token"
+		runtimeToken = "runtime-token"
+	)
+
+	seen := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case atomGraphQLPath:
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected GraphQL method: %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer "+serviceToken {
+				t.Fatalf("unexpected GraphQL authorization header: %q", got)
+			}
+			var payload struct {
+				Query     string         `json:"query"`
+				Variables map[string]any `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			switch {
+			case strings.Contains(payload.Query, "authzCheck"):
+				seen["authzCheck"] = true
+				input, ok := payload.Variables["input"].(map[string]any)
+				if !ok {
+					t.Fatalf("unexpected authz input: %+v", payload.Variables["input"])
+				}
+				if input["subjectId"] != testEntityID || input["action"] != atomActionPublish || input["resourceId"] != "channel-1" {
+					t.Fatalf("unexpected authz input: %+v", input)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"authzCheck": map[string]any{"allowed": true, "reason": "allowed"},
+					},
+				})
+			case strings.Contains(payload.Query, "authorizedObjectIds"):
+				seen["authorizedObjectIds"] = true
+				input, ok := payload.Variables["input"].(map[string]any)
+				if !ok {
+					t.Fatalf("unexpected authorized objects input: %+v", payload.Variables["input"])
+				}
+				if input["subjectId"] != testEntityID ||
+					input["action"] != atomActionRead ||
+					input["objectKind"] != atomObjectKindEntity ||
+					input["objectType"] != atomKindDevice ||
+					input["tenantId"] != testWorkspaceID {
+					t.Fatalf("unexpected authorized objects input: %+v", input)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"authorizedObjectIds": map[string]any{"ids": []string{testDeviceID}, "total": 1},
+					},
+				})
+			case strings.Contains(payload.Query, "createAccessToken"):
+				seen["createAccessToken"] = true
+				input, ok := payload.Variables["input"].(map[string]any)
+				if !ok ||
+					input["name"] != "magistrala-service" ||
+					input["description"] != "Magistrala service token" ||
+					input["subjectId"] != testEntityID ||
+					input["scoped"] != false ||
+					len(input["permissions"].([]any)) != 0 {
+					t.Fatalf("unexpected createAccessToken input: %+v", payload.Variables["input"])
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"createAccessToken": map[string]any{
+							"credentialId": testCredentialID,
+							"token":        "atom_00000000000000000000000000000000_0000000000000000000000000000000000000000000000000000000000000000",
+							"name":         "magistrala-service",
+						},
+					},
+				})
+			default:
+				t.Fatalf("unexpected GraphQL payload: %s", payload.Query)
+			}
+		case atomAuthIntrospectPath:
+			seen["introspect"] = true
+			if r.Method != http.MethodGet {
+				t.Fatalf("unexpected introspection method: %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer "+runtimeToken {
+				t.Fatalf("unexpected introspection authorization header: %q", got)
+			}
+			_ = json.NewEncoder(w).Encode(IntrospectionResponse{
+				Active:    true,
+				EntityID:  testEntityID,
+				TenantID:  testWorkspaceID,
+				SessionID: "session-1",
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Token: serviceToken, Timeout: time.Second})
+	authz, err := client.CheckAuthz(context.Background(), AuthzRequest{
+		SubjectID:  testEntityID,
+		Action:     atomActionPublish,
+		ResourceID: "channel-1",
+	})
+	if err != nil {
+		t.Fatalf("authz check failed: %v", err)
+	}
+	if !authz.Allowed {
+		t.Fatalf("unexpected authz response: %+v", authz)
+	}
+
+	objects, err := client.AuthorizedObjectIDs(context.Background(), AuthorizedObjectIDsQuery{
+		SubjectID:  testEntityID,
+		Action:     atomActionRead,
+		ObjectKind: atomObjectKindEntity,
+		ObjectType: atomKindDevice,
+		TenantID:   testWorkspaceID,
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("authorized object listing failed: %v", err)
+	}
+	if objects.Total != 1 || len(objects.IDs) != 1 || objects.IDs[0] != testDeviceID {
+		t.Fatalf("unexpected authorized object listing: %+v", objects)
+	}
+
+	created, err := client.CreateUnscopedAccessToken(context.Background(), testEntityID, "magistrala-service", "Magistrala service token")
+	if err != nil {
+		t.Fatalf("create access token failed: %v", err)
+	}
+	if created.CredentialID != testCredentialID || created.Token == "" {
+		t.Fatalf("unexpected access token response: %+v", created)
+	}
+
+	introspection, err := client.Introspect(context.Background(), runtimeToken)
+	if err != nil {
+		t.Fatalf("introspection failed: %v", err)
+	}
+	if !introspection.Active || introspection.EntityID != testEntityID || introspection.TenantID != testWorkspaceID {
+		t.Fatalf("unexpected introspection response: %+v", introspection)
+	}
+
+	for _, operation := range []string{"authzCheck", "authorizedObjectIds", "createAccessToken", "introspect"} {
+		if !seen[operation] {
+			t.Fatalf("operation %q was not exercised", operation)
+		}
+	}
+}
+
+func TestCreateTenantMapsRouteToAlias(t *testing.T) {
+	createdKeys := map[string]bool{}
+	versionedTypes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch {
+		case strings.Contains(payload.Query, "createTenant"):
+			if !strings.Contains(payload.Query, "route: alias") {
+				t.Fatalf("query does not map tenant alias to route: %s", payload.Query)
+			}
+			input, ok := payload.Variables["input"].(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected input: %+v", payload.Variables["input"])
+			}
+			if input["alias"] != "d1" {
+				t.Fatalf("expected alias input from route, got: %+v", input)
+			}
+			if _, ok := input["route"]; ok {
+				t.Fatalf("input must not use Atom route field: %+v", input)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"createTenant": map[string]any{
+						"id":     testTenantID,
+						"name":   "D1",
+						"route":  "d1",
+						"status": "active",
+					},
+				},
+			})
+		case strings.Contains(payload.Query, "query DeviceTypes("):
+			if payload.Variables["tenantId"] != testTenantID {
+				t.Fatalf("default device type list must be tenant scoped: %+v", payload.Variables)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"profiles": map[string]any{"total": 0, "items": []any{}},
+				},
+			})
+		case strings.Contains(payload.Query, "mutation CreateDeviceType("):
+			input, ok := payload.Variables["input"].(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected device type input: %+v", payload.Variables["input"])
+			}
+			key, _ := input["key"].(string)
+			createdKeys[key] = true
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"createProfile": map[string]any{
+						"id":        "profile-" + key,
+						"tenant_id": testTenantID,
+						"key":       key,
+						"name":      input["displayName"],
+						"status":    DeviceTypeStatusActive,
+					},
+				},
+			})
+		case strings.Contains(payload.Query, "query DeviceTypeVersions("):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"profileVersions": []any{}},
+			})
+		case strings.Contains(payload.Query, "mutation CreateDeviceTypeVersion("):
+			versionedTypes++
+			input, ok := payload.Variables["input"].(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected device type version input: %+v", payload.Variables["input"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"createProfileVersion": map[string]any{
+						"id":             fmt.Sprintf("version-%d", versionedTypes),
+						"device_type_id": payload.Variables["profileId"],
+						"version":        input["version"],
+						"json_schema":    input["jsonSchema"],
+						"ui_schema":      input["uiSchema"],
+						"status":         DeviceTypeVersionStatusActive,
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected GraphQL query: %s", payload.Query)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	got, err := client.CreateTenant(context.Background(), Tenant{Name: "D1", Route: "d1"})
+	if err != nil {
+		t.Fatalf("create tenant failed: %v", err)
+	}
+	if got.ID != testTenantID || got.Route != "d1" {
+		t.Fatalf("unexpected tenant: %+v", got)
+	}
+	if got, want := len(createdKeys), len(defaultDeviceTypes(testTenantID)); got != want {
+		t.Fatalf("expected %d default device types, got %d: %+v", want, got, createdKeys)
+	}
+	for _, key := range []string{"water-meter", "pressure-sensor", "energy-meter", "pump-controller"} {
+		if !createdKeys[key] {
+			t.Fatalf("default device type %q was not created: %+v", key, createdKeys)
+		}
+	}
+	if versionedTypes != len(defaultDeviceTypes(testTenantID)) {
+		t.Fatalf("expected every default device type to get a version, got %d", versionedTypes)
+	}
+}
+
+func TestUpdateTenantMapsRouteToAlias(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !strings.Contains(payload.Query, "updateTenant") || !strings.Contains(payload.Query, "route: alias") {
+			t.Fatalf("query does not map tenant alias to route: %s", payload.Query)
+		}
+		if payload.Variables["id"] != testTenantID {
+			t.Fatalf("unexpected variables: %+v", payload.Variables)
+		}
+		input, ok := payload.Variables["input"].(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected input: %+v", payload.Variables["input"])
+		}
+		if input["alias"] != "d1" {
+			t.Fatalf("expected alias input from route, got: %+v", input)
+		}
+		if _, ok := input["route"]; ok {
+			t.Fatalf("input must not use Atom route field: %+v", input)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"updateTenant": map[string]any{
+					"id":     testTenantID,
+					"name":   "D1",
+					"route":  "d1",
+					"status": "active",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	got, err := client.UpdateTenant(context.Background(), testTenantID, Tenant{Name: "D1", Route: "d1"})
+	if err != nil {
+		t.Fatalf("update tenant failed: %v", err)
+	}
+	if got.ID != testTenantID || got.Route != "d1" {
+		t.Fatalf("unexpected tenant: %+v", got)
+	}
+}
+
+func TestListTenantsMapsRouteToAlias(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !strings.Contains(payload.Query, "$alias: String") ||
+			!strings.Contains(payload.Query, "alias: $alias") ||
+			!strings.Contains(payload.Query, "route: alias") {
+			t.Fatalf("query does not use Atom alias for tenant route lookup: %s", payload.Query)
+		}
+		if strings.Contains(payload.Query, "$route") || strings.Contains(payload.Query, "route: $route") {
+			t.Fatalf("query must not use removed Atom route field/filter: %s", payload.Query)
+		}
+		if payload.Variables["alias"] != "d1" {
+			t.Fatalf("expected alias variable from route, got: %+v", payload.Variables)
+		}
+		if _, ok := payload.Variables["route"]; ok {
+			t.Fatalf("variables must not use Atom route field: %+v", payload.Variables)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"tenants": map[string]any{
+					"items": []Tenant{{ID: testTenantID, Name: "D1", Route: "d1", Status: "active"}},
+					"total": 1,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	got, err := client.ListTenants(context.Background(), Query{Route: "d1", Limit: 1})
+	if err != nil {
+		t.Fatalf("list tenants failed: %v", err)
+	}
+	if got.Total != 1 || len(got.Items) != 1 || got.Items[0].Route != "d1" {
+		t.Fatalf("unexpected tenants: %+v", got)
+	}
+}
+
+func TestCreateSharedKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !strings.Contains(payload.Query, "createSharedKey") {
+			t.Fatalf("query does not create shared key: %s", payload.Query)
+		}
+		if payload.Variables["entityId"] != testDeviceID {
+			t.Fatalf("unexpected entity id: %+v", payload.Variables)
+		}
+		input, ok := payload.Variables["input"].(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected input: %+v", payload.Variables["input"])
+		}
+		if input["key"] != testClientKey || input["description"] != "provisioned from mg" {
+			t.Fatalf("unexpected input: %+v", input)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"createSharedKey": map[string]any{
+					"credentialId": testCredentialID,
+					"key":          testClientKey,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	got, err := client.CreateSharedKey(context.Background(), testDeviceID, testClientKey, "provisioned from mg")
+	if err != nil {
+		t.Fatalf("create shared key failed: %v", err)
+	}
+	if got.CredentialID != testCredentialID || got.Key != testClientKey {
+		t.Fatalf("unexpected shared key response: %+v", got)
+	}
+}
+
+func TestRevealSharedKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !strings.Contains(payload.Query, "revealSharedKey") {
+			t.Fatalf("query does not reveal shared key: %s", payload.Query)
+		}
+		if payload.Variables["entityId"] != testDeviceID || payload.Variables["credentialId"] != testCredentialID {
+			t.Fatalf("unexpected variables: %+v", payload.Variables)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"revealSharedKey": map[string]any{
+					"credentialId": testCredentialID,
+					"key":          testClientKey,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	got, err := client.RevealSharedKey(context.Background(), testDeviceID, testCredentialID)
+	if err != nil {
+		t.Fatalf("reveal shared key failed: %v", err)
+	}
+	if got.CredentialID != testCredentialID || got.Key != testClientKey {
+		t.Fatalf("unexpected shared key response: %+v", got)
+	}
+}
+
+func TestChangeOwnPassword(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !strings.Contains(payload.Query, "changeOwnPassword") {
+			t.Fatalf("query does not change own password: %s", payload.Query)
+		}
+		if payload.Variables["currentPassword"] != "old-password" || payload.Variables["newPassword"] != "new-password" {
+			t.Fatalf("unexpected variables: %+v", payload.Variables)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"changeOwnPassword": true,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	if err := client.ChangeOwnPassword(context.Background(), "old-password", "new-password"); err != nil {
+		t.Fatalf("change own password failed: %v", err)
+	}
+}
+
+func TestListCredentials(t *testing.T) {
+	createdAt := "2026-06-30T10:15:30Z"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != atomGraphQLPath {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !strings.Contains(payload.Query, "credentials") {
+			t.Fatalf("query does not list credentials: %s", payload.Query)
+		}
+		if payload.Variables["entityId"] != testDeviceID {
+			t.Fatalf("unexpected variables: %+v", payload.Variables)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"credentials": map[string]any{
+					"total": 1,
+					"items": []map[string]any{{
+						"id":         testCredentialID,
+						"entity_id":  testDeviceID,
+						"kind":       "shared_key",
+						"identifier": "",
+						"status":     "active",
+						"created_at": createdAt,
+					}},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	got, err := client.ListCredentials(context.Background(), testDeviceID)
+	if err != nil {
+		t.Fatalf("list credentials failed: %v", err)
+	}
+	if got.Total != 1 || len(got.Items) != 1 {
+		t.Fatalf("unexpected credentials response: %+v", got)
+	}
+	item := got.Items[0]
+	if item.ID != testCredentialID || item.EntityID != testDeviceID || item.Kind != "shared_key" || item.Status != "active" {
+		t.Fatalf("unexpected credential item: %+v", item)
+	}
+	if item.CreatedAt.Format(time.RFC3339) != createdAt {
+		t.Fatalf("unexpected created_at: %s", item.CreatedAt.Format(time.RFC3339))
+	}
+}
+
+func TestCapabilityIDPaginatesBeyondFirstPageAndCaches(t *testing.T) {
+	const total = 150
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		limit := int(payload.Variables["limit"].(float64))
+		offset := int(payload.Variables["offset"].(float64))
+		items := make([]Capability, 0, limit)
+		for i := offset; i < offset+limit && i < total; i++ {
+			items = append(items, Capability{ID: fmt.Sprintf("cap-%d", i), Name: fmt.Sprintf("action-%d", i)})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"actions": map[string]any{"items": items, "total": total},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+
+	id, err := client.CapabilityID(context.Background(), "action-120")
+	if err != nil {
+		t.Fatalf("capability id lookup failed: %v", err)
+	}
+	if id != "cap-120" {
+		t.Fatalf("unexpected capability id: %s", id)
+	}
+	if requests < 2 {
+		t.Fatalf("expected the scan to paginate past the first page, got %d requests", requests)
+	}
+
+	requestsBeforeCachedLookup := requests
+	if _, err := client.CapabilityID(context.Background(), "action-120"); err != nil {
+		t.Fatalf("second capability id lookup failed: %v", err)
+	}
+	if requests != requestsBeforeCachedLookup {
+		t.Fatalf("expected cached lookup to avoid further requests, got %d new requests", requests-requestsBeforeCachedLookup)
+	}
+}
+
+func TestCapabilityIDNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"actions": map[string]any{"items": []Capability{}, "total": 0},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	if _, err := client.CapabilityID(context.Background(), "missing"); !IsNotFound(err) {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
+func TestLoadConfig(t *testing.T) {
+	t.Setenv("ATOM_URL", "http://atom:8080/")
+	t.Setenv("ATOM_ADMIN_TOKEN", "token")
+	t.Setenv("ATOM_ADMIN_USERNAME", "admin")
+	t.Setenv("ATOM_ADMIN_SECRET", "secret")
+	t.Setenv("ATOM_TIMEOUT", "3s")
+
+	cfg := LoadConfig()
+	if cfg.URL != "http://atom:8080" || cfg.JWKSURL != "http://atom:8080/.well-known/jwks.json" || cfg.Token != "token" || cfg.AdminUsername != "admin" || cfg.AdminSecret != "secret" {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	if cfg.Timeout != 3*time.Second {
+		t.Fatalf("unexpected timeout: %s", cfg.Timeout)
+	}
+}

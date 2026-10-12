@@ -1,0 +1,63 @@
+# Copyright (c) Abstract Machines
+# SPDX-License-Identifier: Apache-2.0
+
+name: Lint and Build
+
+on:
+  workflow_call:
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "go.sum"
+
+      - name: Run linters
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.13.1
+          args: --config ./tools/config/.golangci.yaml
+
+  build:
+    name: Build All Binaries
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "go.sum"
+
+      - name: Build all binaries
+        run: |
+          make all -j $(nproc)
+
+  compile-check:
+    name: Compile Check Redis Event Store
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "go.sum"
+
+      - name: Compile check
+        run: |
+          MG_ES_TYPE=es_redis make all -j $(nproc)

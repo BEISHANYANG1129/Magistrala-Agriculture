@@ -1,0 +1,98 @@
+# actions: 每种任务类型对应的动作序列
+actions:
+  irrigation:
+    - action_type: open_valve
+      device_type: irrigation
+    - action_type: wait
+      device_type: system
+    - action_type: close_valve
+      device_type: irrigation
+  fertilization:
+    - action_type: open_fertilizer
+      device_type: fertilizer
+    - action_type: wait
+      device_type: system
+    - action_type: close_fertilizer
+      device_type: fertilizer
+  spraying:
+    - action_type: start_sprayer
+      device_type: sprayer
+    - action_type: wait
+      device_type: system
+    - action_type: stop_sprayer
+      device_type: sprayer
+  ventilation:
+    - action_type: open_vent
+      device_type: ventilation
+    - action_type: wait
+      device_type: system
+    - action_type: close_vent
+      device_type: ventilation
+  lighting:
+    - action_type: turn_on_light
+      device_type: lighting
+    - action_type: wait
+      device_type: system
+    - action_type: turn_off_light
+      device_type: lighting
+  misting:
+    - action_type: start_mister
+      device_type: mister
+    - action_type: wait
+      device_type: system
+    - action_type: stop_mister
+      device_type: mister
+  heating:
+    - action_type: start_heater
+      device_type: heater
+    - action_type: wait
+      device_type: system
+    - action_type: stop_heater
+      device_type: heater
+  shading:
+    - action_type: deploy_shade
+      device_type: shade
+    - action_type: wait
+      device_type: system
+    - action_type: retract_shade
+      device_type: shade
+
+# scenarios: 语义场景到任务类型和默认参数的映射
+scenarios:
+  drought:
+    task_type: irrigation
+    params:
+      duration_min: 30
+  heat_wave:
+    task_type: irrigation
+    params:
+      duration_min: 20
+  nutrient_deficit:
+    task_type: fertilization
+    params:
+      amount_kg: 5
+  pest_alert:
+    task_type: spraying
+    params:
+      chemical: low-tox
+      duration_min: 10
+  high_humidity:
+    task_type: ventilation
+    params:
+      duration_min: 15
+  low_light:
+    task_type: lighting
+    params:
+      duration_min: 120
+  low_humidity:
+    task_type: misting
+    params:
+      duration_min: 8
+  cold_snap:
+    task_type: heating
+    params:
+      duration_min: 60
+  strong_sunlight:
+    task_type: shading
+    params:
+      duration_min: 45

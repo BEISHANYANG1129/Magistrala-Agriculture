@@ -1,0 +1,249 @@
+# Copyright (c) Abstract Machines
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  mqtt:
+    tcp:
+      v3:
+        addr: "0.0.0.0:1883"
+        protocol: "v3"
+        max_connections: 10000
+        read_timeout: 60s
+        write_timeout: 60s
+      v5:
+        addr: "0.0.0.0:1884"
+        protocol: "v5"
+        max_connections: 10000
+        read_timeout: 60s
+        write_timeout: 60s
+    websocket:
+      v3:
+        addr: "0.0.0.0:8883"
+        path: "/mqtt"
+        protocol: "v3"
+      v5:
+        addr: "0.0.0.0:8884"
+        path: "/mqtt"
+        protocol: "v5"
+  http:
+    plain:
+      addr: "0.0.0.0:8090"
+  coap:
+    plain:
+      addr: "0.0.0.0:5683"
+  amqp:
+    plain:
+      addr: "0.0.0.0:5672"
+      max_connections: 10000
+  amqp091:
+    plain:
+      addr: "0.0.0.0:5682"
+    # The local listener is how a first-party service reaches the broker. It
+    # requires mTLS: FluxMQ matches the URI SAN of the presented certificate
+    # against a principal under auth.local_principals, and only a connection
+    # admitted here may exchange "_flux." message metadata. The Rules Engine
+    # needs that metadata to carry its rule execution trace, so it connects
+    # here rather than on the plain listener.
+    local:
+      addr: "0.0.0.0:5685"
+      max_connections: 32
+      cert_file: "/etc/fluxmq/certs/fluxmq-service-server.crt"
+      key_file: "/etc/fluxmq/certs/fluxmq-service-server.key"
+      ca_file: "/etc/fluxmq/certs/ca.crt"
+      client_auth: "require"
+      min_version: "TLS1.2"
+  health_addr: "0.0.0.0:8081"
+  health_enabled: true
+  shutdown_timeout: 30s
+
+broker:
+  max_message_size: 1048576
+  max_retained_messages: 10000
+  retry_interval: 20s
+  max_retries: 0
+  max_qos: 2
+  async_fan_out: false
+  fan_out_workers: 0
+
+session:
+  max_sessions: 10000
+  default_expiry_interval: 300
+  max_offline_queue_size: 10000
+  max_inflight_messages: 1000
+  max_send_queue_size: 1000
+  offline_queue_policy: "evict"
+  inflight_overflow: 1
+  pending_queue_size: 1000
+
+log:
+  level: "info"
+  format: "text"
+
+storage:
+  type: "badger"
+  badger_dir: "/tmp/fluxmq/data"
+  badger_sync_writes: false
+
+cluster:
+  enabled: true
+  allow_insecure: true
+  node_id: "node1"
+  etcd:
+    data_dir: "/tmp/fluxmq/etcd"
+    bind_addr: "172.30.0.201:2380"
+    client_addr: "127.0.0.1:2379"
+    initial_cluster: "node1=http://172.30.0.201:2380,node2=http://172.30.0.202:2380,node3=http://172.30.0.203:2380"
+    bootstrap: true
+    hybrid_retained_size_threshold: 1024
+  transport:
+    bind_addr: "0.0.0.0:7948"
+    peers:
+      node2: "fluxmq-node2:7948"
+      node3: "fluxmq-node3:7948"
+    route_batch_max_size: 256
+    route_batch_max_delay: 50ms
+    route_batch_flush_workers: 8
+    route_publish_timeout: 15s
+
+queue_manager:
+  auto_commit_interval: 5s
+
+queues:
+  - name: "mqtt"
+    # "mqtt" is this reserved queue's name, not an MQTT-only transport filter;
+    # every protocol adapter uses the same topic-based queue routing. A local-
+    # principal prefix grant is captured by every matching queue, so keep this
+    # binding inside the mqtt namespace rather than also persisting service
+    # streams such as writers and alarms here.
+    topics:
+      - "$queue/mqtt/#"
+    reserved: true
+  - name: "events"
+    topics:
+      - "$queue/events/#"
+    type: "stream"
+    retention:
+      max_age: 168h
+      max_length_bytes: 1073741824
+  - name: "writers"
+    topics:
+      - "$queue/writers/#"
+    type: "stream"
+    retention:
+      max_age: 24h
+      max_length_bytes: 1073741824
+  - name: "alarms"
+    topics:
+      - "$queue/alarms/#"
+    type: "stream"
+    retention:
+      max_age: 24h
+      max_length_bytes: 1073741824
+  - name: "m"
+    topics:
+      - "m/#"
+    type: "stream"
+    retention:
+      max_age: 24h
+      max_length_bytes: 1073741824
+
+auth:
+  # Principals admitted on the service listener. The certificate_uri_san must
+  # match the URI SAN issued by docker/ssl/Makefile (fluxmq_service_certs), and
+  # each secret file must hold the value configured by its service.
+  local_principals:
+    - name: "rules-engine"
+      certificate_uri_san: "spiffe://absmach/magistrala/rules-engine"
+      # A service may consume and may relay the origin of messages it did not
+      # author, both of which the Rules Engine needs when it republishes a
+      # device message. The capability is the principal's, not the listener's.
+      role: "service"
+      current_secret_file: "/etc/fluxmq/secrets/re-current"
+      permissions:
+        # Rule outputs are republished to m.<workspace>.c.<channel>.<subtopic>,
+        # whose tenant and channel identifiers cannot be enumerated here, so the
+        # grant is the topic namespace rather than a list of exact keys. Being a
+        # prefix it is also an ordinary topic publish, which the cluster
+        # forwards; an exact target would be durable on one node and could not
+        # run alongside cluster.enabled.
+        publish:
+          - routing_key_prefix: "m."
+          # The rule output streams. These grants have to live here: a
+          # publication from a connection the broker does not trust has the
+          # broker's own transport protocol and identity stamped on it, so a
+          # saved message would read as "amqp" rather than the protocol the
+          # device published with, and an alarm would name the engine's broker
+          # connection rather than the client. Same prefix reasoning as above --
+          # each queue's own "$queue/<name>/#" binding is what captures it.
+          - routing_key_prefix: "$queue/writers/"
+          - routing_key_prefix: "$queue/alarms/"
+        # The message stream the Rules Engine consumes.
+        subscribe:
+          - "m"
+    - name: "timescale-writer"
+      certificate_uri_san: "spiffe://absmach/magistrala/timescale-writer"
+      role: "service"
+      current_secret_file: "/etc/fluxmq/secrets/timescale-writer-current"
+      permissions:
+        # The writer is a passive consumer of the broker-provisioned stream. It
+        # neither publishes messages nor manages queues.
+        subscribe:
+          - "writers"
+    - name: "postgres-writer"
+      certificate_uri_san: "spiffe://absmach/magistrala/postgres-writer"
+      role: "service"
+      current_secret_file: "/etc/fluxmq/secrets/postgres-writer-current"
+      permissions:
+        # The writer is a passive consumer of the broker-provisioned stream. It
+        # neither publishes messages nor manages queues.
+        subscribe:
+          - "writers"
+    - name: "alarms"
+      certificate_uri_san: "spiffe://absmach/magistrala/alarms"
+      role: "service"
+      current_secret_file: "/etc/fluxmq/secrets/alarms-current"
+      permissions:
+        # Alarms is a passive consumer of the broker-provisioned stream the
+        # Rules Engine writes its alarm outputs to.
+        subscribe:
+          - "alarms"
+    - name: "fluxmq-auth"
+      certificate_uri_san: "spiffe://absmach/magistrala/fluxmq-auth"
+      # The publish proxy relays messages a user published over HTTP. Stating
+      # their origin protocol and publisher is what the "service" role grants;
+      # on an untrusted connection the broker would stamp its own instead and
+      # every such message would be stored as having arrived over AMQP.
+      role: "service"
+      current_secret_file: "/etc/fluxmq/secrets/fluxmq-auth-current"
+      permissions:
+        # Messages are published to m.<workspace>.c.<channel>.<subtopic>, whose
+        # tenant and channel identifiers cannot be enumerated here. It runs no
+        # consumer, so it is granted no subscribe.
+        publish:
+          - routing_key_prefix: "m."
+  external:
+    url: "http://fluxmq-auth:7016"
+    transport: "grpc"
+    timeout: 15s
+    protocols:
+      mqtt: true
+      http: true
+      coap: true
+      amqp: true
+      amqp091: false
+
+hooks:
+  url: "http://fluxmq-auth:7016"
+  transport: "http"
+  timeout: 500ms
+  fail_mode: "deny"
+  protocols:
+    mqtt: true
+    http: true
+    coap: true
+    amqp: true
+    amqp091: true
+  events:
+    auth_on_publish: true
+    auth_on_subscribe: true
+    auth_on_unsubscribe: true

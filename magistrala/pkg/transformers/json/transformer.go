@@ -1,0 +1,224 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package json
+
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/absmach/magistrala/pkg/errors"
+	"github.com/absmach/magistrala/pkg/messaging"
+	"github.com/absmach/magistrala/pkg/transformers"
+)
+
+const sep = "/"
+
+var (
+	keys = [...]string{"publisher", "protocol", "channel", "subtopic", "device_id"}
+
+	// ErrTransform represents an error during parsing message.
+	ErrTransform = errors.New("unable to parse JSON object")
+	// ErrInvalidKey represents the use of a reserved message field.
+	ErrInvalidKey = errors.New("invalid object key")
+	// ErrInvalidTimeField represents the use an invalid time field.
+	ErrInvalidTimeField = errors.New("invalid time field")
+
+	errUnknownFormat     = errors.New("unknown format of JSON message")
+	errInvalidFormat     = errors.New("invalid JSON object")
+	errInvalidNestedJSON = errors.New("invalid nested JSON object")
+)
+
+// TimeField represents the message fields to use as timestamp.
+type TimeField struct {
+	FieldName   string `toml:"field_name"`
+	FieldFormat string `toml:"field_format"`
+	Location    string `toml:"location"`
+}
+
+type transformerService struct {
+	timeFields []TimeField
+}
+
+// New returns a new JSON transformer.
+func New(tfs []TimeField) transformers.Transformer {
+	return &transformerService{
+		timeFields: tfs,
+	}
+}
+
+// Transform transforms Magistrala message to a list of JSON messages.
+func (ts *transformerService) Transform(msg *messaging.Message) (any, error) {
+	ret := Message{
+		Publisher: msg.GetPublisher(),
+		Created:   msg.GetCreated(),
+		Protocol:  msg.GetProtocol(),
+		Channel:   msg.GetChannel(),
+		Subtopic:  msg.GetSubtopic(),
+		DeviceId:  msg.GetDeviceId(),
+	}
+
+	if ret.Subtopic == "" {
+		return nil, errors.Wrap(ErrTransform, errUnknownFormat)
+	}
+
+	subs := strings.Split(ret.Subtopic, "/")
+	if len(subs) == 0 {
+		return nil, errors.Wrap(ErrTransform, errUnknownFormat)
+	}
+
+	format := subs[len(subs)-1]
+	var payload any
+	if err := json.Unmarshal(msg.GetPayload(), &payload); err != nil {
+		return nil, errors.Wrap(ErrTransform, err)
+	}
+
+	switch p := payload.(type) {
+	case map[string]any:
+		if id := popDeviceID(p); id != "" {
+			ret.DeviceId = id
+		}
+		ret.Payload = p
+
+		// Apply timestamp transformation rules depending on key/unit pairs
+		ts, err := ts.transformTimeField(p)
+		if err != nil {
+			return nil, errors.Wrap(ErrInvalidTimeField, err)
+		}
+		if ts != 0 {
+			ret.Created = ts
+		}
+
+		return Messages{[]Message{ret}, format}, nil
+	case []any:
+		res := []Message{}
+		// device_id accumulates forward across the batch exactly like SenML's
+		// bn (RFC 8428 §4.6) — set on one element, it applies to every
+		// following element until the next one sets a new value. Seeded from
+		// the broker-level field so a batch with no per-record key still
+		// carries it, matching the object branch above.
+		deviceID := ret.DeviceId
+		// Make an array of messages from the root array.
+		for _, val := range p {
+			v, ok := val.(map[string]any)
+			if !ok {
+				return nil, errors.Wrap(ErrTransform, errInvalidNestedJSON)
+			}
+			newMsg := ret
+			if id := popDeviceID(v); id != "" {
+				deviceID = id
+			}
+			newMsg.DeviceId = deviceID
+
+			// Apply timestamp transformation rules depending on key/unit pairs
+			ts, err := ts.transformTimeField(v)
+			if err != nil {
+				return nil, errors.Wrap(ErrInvalidTimeField, err)
+			}
+			if ts != 0 {
+				newMsg.Created = ts
+			}
+
+			newMsg.Payload = v
+			res = append(res, newMsg)
+		}
+		return Messages{res, format}, nil
+	default:
+		return nil, errors.Wrap(ErrTransform, errInvalidFormat)
+	}
+}
+
+// popDeviceID extracts the reserved "device_id" key from a decoded record,
+// if present, so it is not also duplicated in the stored Payload. A present
+// but non-string or empty value is still popped but does not count as a
+// device id — this mirrors bn's own "empty does not update the accumulator"
+// rule (see pkg/transformers/senml).
+func popDeviceID(m map[string]any) string {
+	v, ok := m["device_id"]
+	if !ok {
+		return ""
+	}
+	delete(m, "device_id")
+	s, _ := v.(string)
+	return s
+}
+
+// ParseFlat receives flat map that represents complex JSON objects and returns
+// the corresponding complex JSON object with nested maps. It's the opposite
+// of the Flatten function.
+func ParseFlat(flat any) any {
+	msg := make(map[string]any)
+	if v, ok := flat.(map[string]any); ok {
+		for key, value := range v {
+			if value == nil {
+				continue
+			}
+			subKeys := strings.Split(key, sep)
+			n := len(subKeys)
+			if n == 1 {
+				msg[key] = value
+				continue
+			}
+			current := msg
+			for i, k := range subKeys {
+				if _, ok := current[k]; !ok {
+					current[k] = make(map[string]any)
+				}
+				if i == n-1 {
+					current[k] = value
+					break
+				}
+				current = current[k].(map[string]any)
+			}
+		}
+	}
+	return msg
+}
+
+// Flatten makes nested maps flat using composite keys created by concatenation of the nested keys.
+func Flatten(m map[string]any) (map[string]any, error) {
+	return flatten("", make(map[string]any), m)
+}
+
+func flatten(prefix string, m, m1 map[string]any) (map[string]any, error) {
+	for k, v := range m1 {
+		if strings.Contains(k, sep) {
+			return nil, ErrInvalidKey
+		}
+		for _, key := range keys {
+			if k == key {
+				return nil, ErrInvalidKey
+			}
+		}
+		switch val := v.(type) {
+		case map[string]any:
+			var err error
+			m, err = flatten(prefix+k+sep, m, val)
+			if err != nil {
+				return nil, err
+			}
+		default:
+			m[prefix+k] = v
+		}
+	}
+	return m, nil
+}
+
+func (ts *transformerService) transformTimeField(payload map[string]any) (int64, error) {
+	if len(ts.timeFields) == 0 {
+		return 0, nil
+	}
+
+	for _, tf := range ts.timeFields {
+		if val, ok := payload[tf.FieldName]; ok {
+			t, err := parseTimestamp(tf.FieldFormat, val, tf.Location)
+			if err != nil {
+				return 0, err
+			}
+
+			return transformers.ToUnixNano(t.UnixNano()), nil
+		}
+	}
+
+	return 0, nil
+}

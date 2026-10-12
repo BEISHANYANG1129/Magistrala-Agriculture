@@ -1,0 +1,30 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package workspaces.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/absmach/magistrala/internal/grpc/workspaces/v1";
+
+
+// WorkspacesService is a service that provides access to
+// workspaces functionalities for Magistrala services.
+service WorkspacesService {
+  rpc DeleteUserFromWorkspaces(DeleteUserReq)
+    returns (DeleteUserRes) {}
+  rpc RetrieveStatus(common.v1.RetrieveEntityReq) 
+    returns (common.v1.RetrieveEntityRes) {}
+  rpc RetrieveIDByRoute(common.v1.RetrieveIDByRouteReq)
+    returns (common.v1.RetrieveEntityRes) {}
+}
+
+message DeleteUserRes {
+  bool deleted = 1;
+}
+
+message DeleteUserReq{
+  string id          = 1;
+}

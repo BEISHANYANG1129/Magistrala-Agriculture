@@ -1,0 +1,136 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package atom
+
+import (
+	"context"
+	"strings"
+
+	smqauthz "github.com/absmach/magistrala/pkg/authz"
+	"github.com/absmach/magistrala/pkg/errors"
+	"github.com/absmach/magistrala/pkg/policies"
+)
+
+type AuthorizationCompat struct {
+	Client Authorizer
+}
+
+func NewAuthorizationCompat(client Authorizer) AuthorizationCompat {
+	return AuthorizationCompat{Client: client}
+}
+
+func (a AuthorizationCompat) Authorize(ctx context.Context, pr smqauthz.PolicyReq, _ *smqauthz.PATReq) error {
+	subjectID := pr.Subject
+	if subjectID == "" {
+		return errors.ErrAuthentication
+	}
+	objectKind := ObjectKind(pr.ObjectType, legacyResourceKind(pr.ObjectKind, pr.ObjectType))
+	res, err := a.Client.CheckAuthz(ctx, AuthzRequest{
+		SubjectID:  subjectID,
+		Action:     CapabilityName(pr.Permission),
+		ResourceID: resourceID(pr.ObjectType, pr.Object),
+		ObjectKind: objectKind,
+		ObjectID:   pr.Object,
+		Context: map[string]any{
+			atomContextWorkspaceID:      pr.Workspace,
+			"legacy_object_kind":        pr.ObjectKind,
+			atomContextLegacyObjectType: pr.ObjectType,
+			"legacy_permission":         pr.Permission,
+			"legacy_relation":           pr.Relation,
+			"legacy_subject_kind":       pr.SubjectKind,
+			"legacy_subject_type":       pr.SubjectType,
+		},
+	})
+	if err != nil {
+		return errors.Wrap(errors.ErrAuthorization, err)
+	}
+	if !res.Allowed {
+		return errors.ErrAuthorization
+	}
+	return nil
+}
+
+func CapabilityName(action string) string {
+	normalized := strings.ToLower(strings.TrimSpace(action))
+	switch {
+	case normalized == policies.AdminPermission,
+		normalized == "admin_permission",
+		strings.Contains(normalized, "manage_role"):
+		return atomActionManage
+	case strings.Contains(normalized, atomActionAlarmRead):
+		return atomActionAlarmRead
+	case strings.Contains(normalized, atomActionAlarmUpdate):
+		return atomActionAlarmUpdate
+	case strings.Contains(normalized, atomActionAlarmDelete):
+		return atomActionAlarmDelete
+	case strings.Contains(normalized, atomActionAlarmAssign):
+		return atomActionAlarmAssign
+	case strings.Contains(normalized, atomActionAlarmAcknowledge):
+		return atomActionAlarmAcknowledge
+	case strings.Contains(normalized, atomActionAlarmResolve):
+		return atomActionAlarmResolve
+	case normalized == policies.ViewPermission,
+		normalized == atomActionRead,
+		strings.Contains(normalized, "read"),
+		strings.Contains(normalized, "view"):
+		return atomActionRead
+	case normalized == policies.CreatePermission,
+		normalized == "write",
+		strings.Contains(normalized, "create"),
+		strings.Contains(normalized, "update"),
+		strings.Contains(normalized, "edit"),
+		strings.Contains(normalized, "enable"),
+		strings.Contains(normalized, "disable"),
+		strings.Contains(normalized, "assign"),
+		strings.Contains(normalized, "acknowledge"),
+		strings.Contains(normalized, "resolve"):
+		return atomActionWrite
+	case normalized == policies.DeletePermission,
+		strings.Contains(normalized, "delete"),
+		strings.Contains(normalized, "remove"):
+		return atomActionDelete
+	case normalized == policies.PublishPermission:
+		return atomActionPublish
+	case normalized == policies.SubscribePermission:
+		return atomActionSubscribe
+	case normalized == "generate", normalized == "execute":
+		return atomActionExecute
+	case normalized == atomActionList:
+		return atomActionList
+	default:
+		return normalized
+	}
+}
+
+func legacyResourceKind(objectKind, objectType string) string {
+	switch objectKind {
+	case policies.ChannelsKind, policies.NewChannelKind:
+		return KindChannel
+	case policies.DevicesKind, policies.NewDeviceKind:
+		return KindDevice
+	case policies.GroupsKind, policies.NewGroupKind:
+		return atomObjectKindGroup
+	case policies.WorkspacesKind:
+		return atomObjectKindTenant
+	default:
+		switch objectType {
+		case policies.ChannelType:
+			return KindChannel
+		case policies.DeviceType:
+			return KindDevice
+		case policies.GroupType:
+			return atomObjectKindGroup
+		case policies.WorkspaceType:
+			return atomObjectKindTenant
+		case policies.RulesType:
+			return KindRule
+		case policies.ReportsType:
+			return KindReport
+		case policies.AlarmsType:
+			return KindAlarm
+		default:
+			return objectType
+		}
+	}
+}

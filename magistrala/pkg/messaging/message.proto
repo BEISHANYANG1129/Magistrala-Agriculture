@@ -1,0 +1,26 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+package messaging;
+
+option go_package = "./messaging";
+
+// Message represents a message emitted by the Magistrala adapters layer.
+message Message {
+  string channel = 1;
+  string workspace = 2;
+  string subtopic = 3;
+  string publisher = 4;
+  string protocol = 5;
+  bytes payload = 6;
+  int64 created = 7; // Unix timestamp in nanoseconds
+  string client_id = 8; // Transport-level client identifier
+  // Internal metadata propagated between services
+  map<string, string> metadata = 9;
+  // Set only when a publish is already known to be about exactly one
+  // device before it reaches the broker. Never inferred from a raw
+  // gateway batch — see pkg/transformers/senml and pkg/transformers/json
+  // for the per-record mechanism a batch actually uses.
+  string device_id = 10;
+}

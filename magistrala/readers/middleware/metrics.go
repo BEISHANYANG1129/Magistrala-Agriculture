@@ -1,0 +1,57 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build !test
+
+package middleware
+
+import (
+	"time"
+
+	"github.com/absmach/magistrala/readers"
+	"github.com/go-kit/kit/metrics"
+)
+
+var _ readers.MessageRepository = (*metricsMiddleware)(nil)
+
+type metricsMiddleware struct {
+	counter metrics.Counter
+	latency metrics.Histogram
+	svc     readers.MessageRepository
+}
+
+// MetricsMiddleware instruments service by tracking request count and latency.
+func MetricsMiddleware(svc readers.MessageRepository, counter metrics.Counter, latency metrics.Histogram) readers.MessageRepository {
+	return &metricsMiddleware{
+		counter: counter,
+		latency: latency,
+		svc:     svc,
+	}
+}
+
+func (mm *metricsMiddleware) ReadAll(chanID string, rpm readers.PageMetadata) (readers.MessagesPage, error) {
+	defer func(begin time.Time) {
+		mm.counter.With("method", "read_all").Add(1)
+		mm.latency.With("method", "read_all").Observe(time.Since(begin).Seconds())
+	}(time.Now())
+
+	return mm.svc.ReadAll(chanID, rpm)
+}
+
+func (mm *metricsMiddleware) ListGatewayDevices(chanID, publisherID string, rpm readers.PageMetadata) (readers.DeviceStatsPage, error) {
+	defer func(begin time.Time) {
+		mm.counter.With("method", "list_gateway_devices").Add(1)
+		mm.latency.With("method", "list_gateway_devices").Observe(time.Since(begin).Seconds())
+	}(time.Now())
+
+	return mm.svc.ListGatewayDevices(chanID, publisherID, rpm)
+}
+
+func (mm *metricsMiddleware) ListDeviceGateways(chanID, deviceID string, rpm readers.PageMetadata) (readers.DeviceStatsPage, error) {
+	defer func(begin time.Time) {
+		mm.counter.With("method", "list_device_gateways").Add(1)
+		mm.latency.With("method", "list_device_gateways").Observe(time.Since(begin).Seconds())
+	}(time.Now())
+
+	return mm.svc.ListDeviceGateways(chanID, deviceID, rpm)
+}

@@ -1,0 +1,121 @@
+{
+    "offset": 0,
+    "limit": 10,
+    "order": "time",
+    "dir": "desc",
+    "format": "messages",
+    "total": 103,
+    "messages": [
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "12411e95-b5d2-48a5-a651-2049e3ad441b",
+            "protocol": "http",
+            "name": "sensor-air_pressure-14-2:value",
+            "unit": "kpa",
+            "time": 1760327523563419000,
+            "value": 100.5
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "5dd1a3e4-6a1e-4712-a5e1-800a820c9fd6",
+            "protocol": "http",
+            "name": "sensor-co2-13-2:value",
+            "unit": "ppm",
+            "time": 1760327523553667800,
+            "value": 633
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "7224a0b1-c331-4bc1-b455-05dcd7ee9272",
+            "protocol": "http",
+            "name": "sensor-air_humidity-11-2:value",
+            "unit": "percent",
+            "time": 1760327523544165600,
+            "value": 63.5
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "f484a73d-5f1b-4c52-b826-a1a5928749e3",
+            "protocol": "http",
+            "name": "sensor-air_temperature-11-1:value",
+            "unit": "celsius",
+            "time": 1760327523534452500,
+            "value": 23.700000762939453
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "5bbe0475-6208-4f11-9f48-127db4e6757a",
+            "protocol": "http",
+            "name": "sensor-soil_moisture_1-3-2:value",
+            "unit": "percent",
+            "time": 1760327523524893400,
+            "value": 0
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "fb0233a2-46f3-493a-bc1a-42a7372c9379",
+            "protocol": "http",
+            "name": "sensor-soil_temp_1-3-1:value",
+            "unit": "celsius",
+            "time": 1760327523514852900,
+            "value": 24.600000381469727
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "75b22e37-ea0b-4a6f-8bb0-47e02c688975",
+            "protocol": "http",
+            "name": "sensor-wind_direction-2-1:value",
+            "unit": "direction",
+            "time": 1760327523504747300,
+            "string_value": "southeast"
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "e5f34102-6d17-4ecd-b57f-7d07e9389e34",
+            "protocol": "http",
+            "name": "sensor-wind_speed-1-2:value",
+            "unit": "m_per_s",
+            "time": 1760327523494078000,
+            "value": 0
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "9715b3cd-ba24-4239-bbcd-a386e7b3dcb8",
+            "protocol": "http",
+            "name": "sensor-wind_force-1-1:value",
+            "unit": "level",
+            "time": 1760327523479439000,
+            "value": 0
+        },
+        {
+            "channel": "7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f",
+            "subtopic": "light",
+            "publisher": "9715b3cd-ba24-4239-bbcd-a386e7b3dcb8",
+            "protocol": "http",
+            "name": "sensor-40366226-1-1:",
+            "unit": "级",
+            "time": 1760326285645100300,
+            "value": 0
+        }
+    ]
+}
+
+curl -X POST http://localhost:8080/llm/plan-and-send \
+  -H "Content-Type: application/json" \
+  -d '{"limit":10,"domainId":"afd4c584-5288-46f6-8144-a1bd5f52f65f","channelId":"7ea3cf07-43e8-4fa3-a3a0-61f24ac6df2f"}'
+
+
+
+// 接下来将llm分析定性为区域分析，然后精简传入llm的内容，只保留必要的信息，比如传感器类型、数值和时间戳，去掉冗余信息如publisher、protocol等。这样可以减少传输的数据量，提高处理效率。
+// 在前面先进行clientid和区域的匹配，然后传入只需要区域信息，不需要clientid。
+
+// 查看一下使用magistrala查询得到的message是什么样子的，然后根据这个格式来构建传入llm的内容。

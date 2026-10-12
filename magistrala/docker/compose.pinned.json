@@ -1,0 +1,53 @@
+{
+  "services": {
+    "atom": {
+      "image": "ghcr.io/absmach/atom@sha256:7b55690d9a7b494563a2dcedee7f6f210be89bcb63ca04aedbb4e6660160cde6"
+    },
+    "atom-ui": {
+      "image": "ghcr.io/absmach/atom-ui@sha256:efcf5de4a33efd63dab1c7b88fd43891877da5a8fc4c98d9731a67845da2f212"
+    },
+    "bootstrap": {
+      "image": "ghcr.io/absmach/magistrala/bootstrap@sha256:751ff4988446ba0c74c2c980ff6d47b74f57b9afd0c3873459f21db49da75395"
+    },
+    "ui-backend": {
+      "image": "ghcr.io/absmach/magistrala/ui-backend@sha256:b3986672fa02e2b202bb085405971c0c87029e138fd4af4669c2170d861ac4f7"
+    },
+    "fluxmq-auth": {
+      "image": "ghcr.io/absmach/magistrala/fluxmq@sha256:732f6c1931523805020df7bd4aafb5c827aff7904df99089ef4f1c23412352d4"
+    },
+    "fluxmq-node1": {
+      "image": "ghcr.io/absmach/fluxmq@sha256:e82e2e476fa073e3709183018fb7410d801911ff5a9c9e9cf99271160df6f993"
+    },
+    "fluxmq-node2": {
+      "image": "ghcr.io/absmach/fluxmq@sha256:e82e2e476fa073e3709183018fb7410d801911ff5a9c9e9cf99271160df6f993"
+    },
+    "fluxmq-node3": {
+      "image": "ghcr.io/absmach/fluxmq@sha256:e82e2e476fa073e3709183018fb7410d801911ff5a9c9e9cf99271160df6f993"
+    },
+    "timescale-reader": {
+      "image": "ghcr.io/absmach/magistrala/timescale-reader@sha256:a208407d79e2ae2e09748ebaae457c28a8f2887289fba83a569bdce088c77f3e"
+    },
+    "timescale-writer": {
+      "image": "ghcr.io/absmach/magistrala/timescale-writer@sha256:bd09936e751fddaa76f106df30dd02715e7d21d10fb7b512207f9f5c0f6b00e5"
+    },
+    "timescale-writer-json": {
+      "image": "ghcr.io/absmach/magistrala/timescale-writer@sha256:bd09936e751fddaa76f106df30dd02715e7d21d10fb7b512207f9f5c0f6b00e5"
+    },
+    "re": {
+      "image": "ghcr.io/absmach/magistrala/re@sha256:0257a658a1086100bcce29271b7bd13bbe8f314f4b07ef83ba070e5c56ab062a"
+    },
+    "alarms": {
+      "image": "ghcr.io/absmach/magistrala/alarms@sha256:bac4ce70671584a4ba43364f9454473ea95a33294dd5d1b05585f58f7c8fa0fe"
+    },
+    "reports": {
+      "image": "ghcr.io/absmach/magistrala/reports@sha256:048822070764681da5ccb3760cfd5b322c23d02683fa5e67b6ec35a37a82a513"
+    },
+    "ui": {
+      "image": "magistrala-agriculture-ui:local",
+      "build": {
+        "context": "./ui-bootstrap-compat",
+        "dockerfile": "Dockerfile"
+      }
+    }
+  }
+}

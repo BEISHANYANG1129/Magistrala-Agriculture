@@ -1,0 +1,50 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package users.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/absmach/magistrala/api/grpc/users/v1";
+
+// UsersService exposes user-related functionality over gRPC.
+service UsersService {
+  // RetrieveUsers fetches users for the provided IDs.
+  rpc RetrieveUsers(RetrieveUsersReq) returns (RetrieveUsersRes) {}
+}
+
+message RetrieveUsersReq {
+  repeated string ids = 1;
+  uint64 offset = 2;
+  uint64 limit = 3;
+}
+
+message RetrieveUsersRes {
+  uint64 total = 1;
+  uint64 limit = 2;
+  uint64 offset = 3;
+  repeated User users = 4;
+}
+
+message User {
+  string id = 1;
+  string first_name = 2;
+  string last_name = 3;
+  repeated string tags = 4;
+  google.protobuf.Struct metadata = 5;
+  google.protobuf.Struct private_metadata = 6;
+  uint32 status = 7;
+  uint32 role = 8;
+  string profile_picture = 9;
+  string username = 10;
+  string email = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  string updated_by = 14;
+  google.protobuf.Timestamp verified_at = 15;
+  string auth_provider = 16;
+  repeated string permissions = 17;
+}

@@ -1,0 +1,194 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package atom
+
+const (
+	KindUser             = "user"
+	KindDevice           = "device"
+	KindChannel          = "channel"
+	KindRule             = "rule"
+	KindAlarm            = "alarm"
+	KindReport           = "report"
+	KindBootstrapConfig  = "bootstrap_config"
+	KindBootstrapProfile = "bootstrap_profile"
+)
+
+func TenantFromFields(f ObjectFields) Tenant {
+	return Tenant{
+		ID:        f.ID,
+		Name:      f.Name,
+		Route:     f.Route,
+		Tags:      cloneStrings(f.Tags),
+		Status:    tenantStatus(f.Status),
+		CreatedBy: f.CreatedBy,
+		UpdatedBy: f.UpdatedBy,
+		Attributes: compact(Attributes{
+			atomAttributeSource:    atomAttributeSourceMagistrala,
+			atomAttributeMetadata:  cloneMap(f.Metadata),
+			atomAttributeCreatedAt: timeString(f.CreatedAt),
+			atomAttributeUpdatedAt: timeString(f.UpdatedAt),
+		}),
+	}
+}
+
+// Object-group membership is many-to-many; Atom rejects parent_group_id as
+// an entity attribute, so it isn't set here — use AddGroupMember instead.
+func EntityFromFields(f ObjectFields) Entity {
+	return Entity{
+		ID:       f.ID,
+		Kind:     entityKind(f.Kind),
+		Name:     f.Name,
+		TenantID: f.TenantID,
+		Status:   entityStatus(f.Status),
+		Attributes: compact(Attributes{
+			atomAttributeSource:    atomAttributeSourceMagistrala,
+			"magistrala_kind":      f.Kind,
+			atomAttributeTags:      cloneStrings(f.Tags),
+			atomAttributeMetadata:  cloneMap(f.Metadata),
+			"private_metadata":     cloneMap(f.Private),
+			atomAttributeCreatedAt: timeString(f.CreatedAt),
+			atomAttributeUpdatedAt: timeString(f.UpdatedAt),
+			atomAttributeUpdatedBy: f.UpdatedBy,
+		}),
+	}
+}
+
+func tenantStatus(status string) string {
+	switch status {
+	case atomStatusEnabled:
+		return atomStatusActive
+	case atomStatusDisabled:
+		return atomStatusInactive
+	case "freezed":
+		return atomStatusFrozen
+	case atomStatusDeleted:
+		return atomStatusDeleted
+	default:
+		return status
+	}
+}
+
+func entityStatus(status string) string {
+	switch status {
+	case atomStatusEnabled:
+		return atomStatusActive
+	case atomStatusDisabled, atomStatusDeleted:
+		return atomStatusInactive
+	default:
+		return status
+	}
+}
+
+func entityKind(kind string) string {
+	switch kind {
+	case KindUser:
+		return atomKindHuman
+	case KindDevice:
+		return atomKindDevice
+	default:
+		return kind
+	}
+}
+
+// atomObjectType returns the namespaced object type Atom requires,
+// e.g. "entity:device", "resource:channel".
+func atomObjectType(objectKind, kind string) string {
+	return objectKind + ":" + kind
+}
+
+func GroupFromFields(f ObjectFields) Group {
+	return Group{
+		ID:          f.ID,
+		Name:        f.Name,
+		TenantID:    f.TenantID,
+		Description: f.Description,
+		ParentID:    f.ParentID,
+		Status:      entityStatus(f.Status),
+		Attributes: compact(Attributes{
+			atomAttributeSource:    atomAttributeSourceMagistrala,
+			"parent_id":            f.ParentID,
+			atomAttributeTags:      cloneStrings(f.Tags),
+			atomAttributeMetadata:  cloneMap(f.Metadata),
+			atomAttributeStatus:    f.Status,
+			atomAttributeCreatedAt: timeString(f.CreatedAt),
+			atomAttributeUpdatedAt: timeString(f.UpdatedAt),
+			atomAttributeUpdatedBy: f.UpdatedBy,
+		}),
+	}
+}
+
+// Object-group membership is many-to-many; Atom rejects parent_group_id as
+// a resource attribute, so it isn't set here — use AddGroupMember instead.
+func ResourceFromFields(f ObjectFields) Resource {
+	return Resource{
+		ID:       f.ID,
+		Kind:     f.Kind,
+		Name:     f.Name,
+		TenantID: f.TenantID,
+		OwnerID:  f.OwnerID,
+		Attributes: compact(Attributes{
+			atomAttributeSource:    atomAttributeSourceMagistrala,
+			atomAttributeStatus:    f.Status,
+			atomAttributeRoute:     f.Route,
+			atomAttributeTags:      cloneStrings(f.Tags),
+			atomAttributeMetadata:  cloneMap(f.Metadata),
+			atomAttributeCreatedAt: timeString(f.CreatedAt),
+			atomAttributeUpdatedAt: timeString(f.UpdatedAt),
+			atomAttributeUpdatedBy: f.UpdatedBy,
+		}),
+	}
+}
+
+func compact(attrs Attributes) Attributes {
+	for k, v := range attrs {
+		switch val := v.(type) {
+		case string:
+			if val == "" {
+				delete(attrs, k)
+			}
+		case []string:
+			if len(val) == 0 {
+				delete(attrs, k)
+			}
+		case map[string]any:
+			if len(val) == 0 {
+				delete(attrs, k)
+			}
+		case nil:
+			delete(attrs, k)
+		}
+	}
+	return attrs
+}
+
+func cloneStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func timeString(t interface {
+	IsZero() bool
+	Format(string) string
+},
+) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006-01-02T15:04:05.999999999Z07:00")
+}

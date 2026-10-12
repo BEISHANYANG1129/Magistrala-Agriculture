@@ -1,0 +1,15 @@
+# Copyright (c) Abstract Machines
+# SPDX-License-Identifier: Apache-2.0
+
+# CoAP is temporarily ignored since we don't have tests for it yet.
+coverage:
+  ignore:
+    - "tools/*"
+    - "api/grpc/**"
+    - "cmd/*"
+    - "coap/**"
+    - "**/mocks/*"
+    - "*/middleware/*"
+    - "pkg/sid/mock.go"
+    - "pkg/tracing/utils.go"
+    - "pkg/prometheus/*"

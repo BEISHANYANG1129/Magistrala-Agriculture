@@ -1,0 +1,436 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package atom
+
+import "time"
+
+type Attributes map[string]any
+
+type Tenant struct {
+	ID         string     `json:"id,omitempty"`
+	Name       string     `json:"name"`
+	Route      string     `json:"route,omitempty"`
+	Tags       []string   `json:"tags,omitempty"`
+	Status     string     `json:"status,omitempty"`
+	Attributes Attributes `json:"attributes,omitempty"`
+	CreatedBy  string     `json:"created_by,omitempty"`
+	UpdatedBy  string     `json:"updated_by,omitempty"`
+	CreatedAt  time.Time  `json:"created_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at,omitempty"`
+}
+
+type Entity struct {
+	ID   string `json:"id,omitempty"`
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	// ExternalID is the identifier assigned outside Atom — a device's serial,
+	// MAC or SKU (ATOM-06). Opaque and unvalidated, case-sensitive, trimmed,
+	// unique per tenant among live entities, and returned byte-identical to
+	// what was stored.
+	ExternalID string `json:"external_id,omitempty"`
+	TenantID   string `json:"tenant_id,omitempty"`
+
+	// DeviceTypeID and DeviceTypeVersionID bind the entity to a device type.
+	// With a device type bound, Atom validates Attributes against that
+	// version's schema on every write. Leaving DeviceTypeVersionID empty binds
+	// to the type's highest-numbered active version.
+	//
+	// Both are write-once-per-call in the sense that Atom coalesces them: an
+	// update that leaves them empty keeps the existing binding rather than
+	// clearing it. There is no way to unbind a device through Atom's API.
+	DeviceTypeID        string `json:"device_type_id,omitempty"`
+	DeviceTypeVersionID string `json:"device_type_version_id,omitempty"`
+
+	Status     string     `json:"status,omitempty"`
+	Attributes Attributes `json:"attributes,omitempty"`
+	CreatedAt  time.Time  `json:"created_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at,omitempty"`
+}
+
+// Measurement is one value a device of a given type reports.
+//
+// Rendered into the device type's JSON Schema, a measurement constrains the
+// device's *attributes*, not its telemetry — see BuildCapabilitySchema.
+type Measurement struct {
+	Name string `json:"name"`
+	Unit string `json:"unit,omitempty"`
+
+	// Access is "r" (default) or "rw". Advisory only: it renders to JSON
+	// Schema's readOnly annotation, which Atom's validator records but does
+	// not enforce.
+	Access string `json:"access,omitempty"`
+
+	// Type is a ValueType* constant, defaulting to ValueTypeNumber.
+	Type     string   `json:"type,omitempty"`
+	Required bool     `json:"required,omitempty"`
+	Min      *float64 `json:"min,omitempty"`
+	Max      *float64 `json:"max,omitempty"`
+	Enum     []string `json:"enum,omitempty"`
+}
+
+// Command is one instruction a device of a given type accepts. Declaring a
+// command does not route it: dispatch is unspecified and out of scope.
+type Command struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+
+	// Params maps parameter name to a ValueType* constant.
+	Params map[string]string `json:"params,omitempty"`
+}
+
+// CapabilityDocument is what a device type declares, in the terms callers
+// think in, so nobody hand-writes JSON Schema. BuildCapabilitySchema renders
+// it for storage and ParseCapabilityDocument reads it back.
+type CapabilityDocument struct {
+	Measurements []Measurement `json:"measurements,omitempty"`
+	Commands     []Command     `json:"commands,omitempty"`
+}
+
+// DeviceType is a named, versioned declaration of what a class of device
+// measures and accepts. Devices bind to a specific version of one.
+//
+// It maps to an Atom Profile with object_kind "entity" and kind "device". The
+// Atom-side name is never exposed here: "profile" collides with Bootstrap's
+// unrelated Profile, so this concept is Device Type on every Magistrala
+// surface.
+type DeviceType struct {
+	ID       string `json:"id,omitempty"`
+	TenantID string `json:"tenant_id,omitempty"`
+
+	// Key identifies the type within a tenant and cannot be changed after
+	// creation.
+	Key         string    `json:"key"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+}
+
+// DeviceTypeVersion is one immutable revision of a device type's capability
+// document. Devices stay bound to the version they were created against, so a
+// new version never invalidates deployed devices.
+type DeviceTypeVersion struct {
+	ID           string `json:"id,omitempty"`
+	DeviceTypeID string `json:"device_type_id,omitempty"`
+	Version      int    `json:"version"`
+	Status       string `json:"status,omitempty"`
+
+	// Capabilities is the declaration, filled in on read.
+	Capabilities CapabilityDocument `json:"capabilities"`
+
+	// JSONSchema and UISchema are what Atom stores and validates against.
+	// They are exposed for advanced use; Capabilities is the documented path.
+	JSONSchema map[string]any `json:"json_schema,omitempty"`
+	UISchema   map[string]any `json:"ui_schema,omitempty"`
+
+	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+type DeviceTypeList struct {
+	Items []DeviceType `json:"items"`
+	Total uint64       `json:"total"`
+}
+
+// DeviceTypeQuery filters a device type listing. TenantID is required: see
+// ListDeviceTypes for why global types are not exposed.
+type DeviceTypeQuery struct {
+	TenantID string
+	Status   string
+	Limit    uint64
+	Offset   uint64
+}
+
+type Group struct {
+	ID          string     `json:"id,omitempty"`
+	Name        string     `json:"name"`
+	TenantID    string     `json:"tenant_id,omitempty"`
+	Description string     `json:"description,omitempty"`
+	ParentID    string     `json:"parent_id,omitempty"`
+	Status      string     `json:"status,omitempty"`
+	Attributes  Attributes `json:"attributes,omitempty"`
+	CreatedAt   time.Time  `json:"created_at,omitempty"`
+	UpdatedAt   time.Time  `json:"updated_at,omitempty"`
+}
+
+type Resource struct {
+	ID         string     `json:"id,omitempty"`
+	Kind       string     `json:"kind"`
+	Name       string     `json:"name"`
+	TenantID   string     `json:"tenant_id,omitempty"`
+	OwnerID    string     `json:"owner_id,omitempty"`
+	Attributes Attributes `json:"attributes,omitempty"`
+	CreatedAt  time.Time  `json:"created_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at,omitempty"`
+}
+
+type Query struct {
+	IDs      []string
+	Q        string
+	Kind     string
+	TenantID string
+	Name     string
+	Route    string
+	ParentID string
+	Status   string
+	Limit    uint64
+	Offset   uint64
+
+	// DeviceTypeID restricts an entity listing to devices bound to one device
+	// type, across all of its versions.
+	DeviceTypeID string
+
+	// AttributesContains filters by JSONB containment — an entity must contain
+	// every key/value given here (array values match by containment, not equality).
+	AttributesContains map[string]any
+}
+
+type AuthzRequest struct {
+	SubjectID  string         `json:"subject_id"`
+	Action     string         `json:"action"`
+	ResourceID string         `json:"resource_id,omitempty"`
+	ObjectKind string         `json:"object_kind,omitempty"`
+	ObjectID   string         `json:"object_id,omitempty"`
+	Context    map[string]any `json:"context,omitempty"`
+}
+
+type AuthzResponse struct {
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+type Capability struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type CapabilityList struct {
+	Items []Capability `json:"items"`
+	Total int64        `json:"total,omitempty"`
+}
+
+type CapabilityApplicability struct {
+	ActionID    string `json:"action_id"`
+	ActionName  string `json:"action_name"`
+	Description string `json:"description,omitempty"`
+	ObjectKind  string `json:"object_kind"`
+	ObjectType  string `json:"object_type,omitempty"`
+}
+
+type CapabilityApplicabilitySpec struct {
+	ActionName  string
+	Description string
+	ObjectKind  string
+	ObjectType  string
+}
+
+type ActionAssignmentRule struct {
+	ID         string `json:"id"`
+	TenantID   string `json:"tenant_id,omitempty"`
+	EntityKind string `json:"entity_kind"`
+	ActionName string `json:"action_name"`
+	ObjectKind string `json:"object_kind"`
+	ObjectType string `json:"object_type,omitempty"`
+	Decision   string `json:"decision"`
+	IsAbsolute bool   `json:"is_absolute"`
+	CreatedAt  string `json:"created_at,omitempty"`
+}
+
+type ActionAssignmentRuleList struct {
+	Items []ActionAssignmentRule `json:"items"`
+	Total int64                  `json:"total,omitempty"`
+}
+
+type ActionAssignmentRuleSpec struct {
+	TenantID   string
+	EntityKind string
+	ActionName string
+	ObjectKind string
+	ObjectType string
+	Decision   string
+	IsAbsolute bool
+}
+
+type PermissionBlock struct {
+	ID         string         `json:"id"`
+	TenantID   string         `json:"tenant_id,omitempty"`
+	ScopeMode  string         `json:"scope_mode"`
+	ObjectKind string         `json:"object_kind,omitempty"`
+	ObjectType string         `json:"object_type,omitempty"`
+	ObjectID   string         `json:"object_id,omitempty"`
+	GroupID    string         `json:"group_id,omitempty"`
+	Effect     string         `json:"effect"`
+	Conditions map[string]any `json:"conditions,omitempty"`
+	Actions    []Capability   `json:"actions,omitempty"`
+}
+
+type CreatePermissionBlock struct {
+	TenantID   string         `json:"tenant_id,omitempty"`
+	ScopeMode  string         `json:"scope_mode"`
+	ObjectKind string         `json:"object_kind,omitempty"`
+	ObjectType string         `json:"object_type,omitempty"`
+	ObjectID   string         `json:"object_id,omitempty"`
+	GroupID    string         `json:"group_id,omitempty"`
+	Effect     string         `json:"effect,omitempty"`
+	Conditions map[string]any `json:"conditions,omitempty"`
+	ActionIDs  []string       `json:"action_ids"`
+}
+
+type DirectPolicy struct {
+	ID                string          `json:"id"`
+	TenantID          string          `json:"tenant_id,omitempty"`
+	SubjectKind       string          `json:"subject_kind"`
+	SubjectID         string          `json:"subject_id"`
+	PermissionBlockID string          `json:"permission_block_id"`
+	PermissionBlock   PermissionBlock `json:"permission_block,omitempty"`
+	CreatedAt         time.Time       `json:"created_at,omitempty"`
+}
+
+type CreateDirectPolicy struct {
+	TenantID          string `json:"tenant_id,omitempty"`
+	SubjectKind       string `json:"subject_kind"`
+	SubjectID         string `json:"subject_id"`
+	PermissionBlockID string `json:"permission_block_id"`
+}
+
+type DirectPolicyQuery struct {
+	TenantID    string
+	SubjectKind string
+	SubjectID   string
+	Limit       uint64
+	Offset      uint64
+}
+
+type DirectPolicyList struct {
+	Items []DirectPolicy `json:"items"`
+	Total uint64         `json:"total"`
+}
+
+// GroupGrant grants a subject one or more actions over a group's members:
+// its direct members, or the members of its descendant groups if
+// IncludeDescendants is set. A grant maps to exactly one PermissionBlock and
+// one DirectPolicy, so it costs the same to write whether the group has one
+// member or thousands, and it automatically covers members added later.
+type GroupGrant struct {
+	TenantID           string
+	GroupID            string
+	SubjectKind        string
+	SubjectID          string
+	ObjectKind         string
+	ObjectType         string
+	Actions            []string
+	IncludeDescendants bool
+}
+
+type AuthorizedObjectIDsQuery struct {
+	SubjectID  string
+	Action     string
+	ObjectKind string
+	ObjectType string
+	TenantID   string
+	Q          string
+	Limit      uint64
+	Offset     uint64
+}
+
+type AuthorizedObjectIDs struct {
+	IDs   []string `json:"ids"`
+	Total uint64   `json:"total"`
+}
+
+type TokenClaims struct {
+	SubjectID string `json:"sub"`
+	SessionID string `json:"sid,omitempty"`
+	TenantID  string `json:"tid,omitempty"`
+	ExpiresAt int64  `json:"exp,omitempty"`
+	IssuedAt  int64  `json:"iat,omitempty"`
+}
+
+type IntrospectionResponse struct {
+	Active    bool   `json:"active"`
+	EntityID  string `json:"entity_id"`
+	TenantID  string `json:"tenant_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+type LoginRequest struct {
+	Identifier string `json:"identifier"`
+	Secret     string `json:"secret"`
+	Kind       string `json:"kind,omitempty"`
+}
+
+type LoginResponse struct {
+	Token     string    `json:"token"`
+	EntityID  string    `json:"entity_id"`
+	SessionID string    `json:"session_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type AccessTokenResponse struct {
+	CredentialID string     `json:"credentialId"`
+	Token        string     `json:"token"`
+	Name         string     `json:"name,omitempty"`
+	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
+}
+
+type SharedKeyResponse struct {
+	CredentialID string     `json:"credentialId"`
+	Key          string     `json:"key"`
+	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
+}
+
+type Credential struct {
+	ID         string     `json:"id"`
+	EntityID   string     `json:"entity_id,omitempty"`
+	Kind       string     `json:"kind"`
+	Identifier string     `json:"identifier,omitempty"`
+	Status     string     `json:"status"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at,omitempty"`
+}
+
+type CredentialList struct {
+	Items []Credential `json:"items"`
+	Total uint64       `json:"total"`
+}
+
+type ResourceList struct {
+	Items []Resource `json:"items"`
+	Total uint64     `json:"total"`
+}
+
+type TenantList struct {
+	Items []Tenant `json:"items"`
+	Total uint64   `json:"total"`
+}
+
+type EntityList struct {
+	Items []Entity `json:"items"`
+	Total uint64   `json:"total"`
+}
+
+type GroupList struct {
+	Items []Group `json:"items"`
+	Total uint64  `json:"total"`
+}
+
+type ObjectFields struct {
+	ID          string
+	Kind        string
+	Name        string
+	TenantID    string
+	OwnerID     string
+	Status      string
+	Route       string
+	ParentID    string
+	Tags        []string
+	Metadata    map[string]any
+	Private     map[string]any
+	CreatedBy   string
+	UpdatedBy   string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Description string
+}

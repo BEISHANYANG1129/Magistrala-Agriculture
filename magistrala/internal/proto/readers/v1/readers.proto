@@ -1,0 +1,140 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package readers.v1;
+
+option go_package = "github.com/absmach/magistrala/api/grpc/readers/v1";
+
+// ReadersService is a service that provides access to
+// readers functionalities for Magistrala services.
+service ReadersService {
+  rpc ReadMessages(ReadMessagesReq)
+    returns (ReadMessagesRes) {}
+
+  // ListGatewayDevices returns the devices observed publishing through a
+  // gateway (MG-15): distinct device_id values for messages on channel_id
+  // published by publisher_id, each with its last-seen time and message
+  // count.
+  rpc ListGatewayDevices(ListGatewayDevicesReq)
+    returns (DeviceStatsRes) {}
+
+  // ListDeviceGateways returns the gateways observed relaying for a device
+  // (MG-15): distinct publisher values for messages on channel_id carrying
+  // device_id, each with its last-seen time and message count.
+  rpc ListDeviceGateways(ListDeviceGatewaysReq)
+    returns (DeviceStatsRes) {}
+}
+
+message PageMetadata {
+  uint64 limit               = 1;
+  uint64 offset              = 2;
+  string protocol            = 3;
+  string name                = 4;
+  double value               = 5;
+  string publisher           = 6;
+  bool bool_value            = 7;
+  string string_value        = 8;
+  string data_value          = 9;
+  double from                = 10;
+  double to                  = 11;
+  string subtopic            = 12;
+  string interval            = 13;
+  bool read                  = 14;
+  Aggregation aggregation    = 15;
+  string comparator          = 16;
+  string format              = 17;
+  string order               = 18;
+  string dir                 = 19;
+  repeated string publishers = 20;
+  repeated string device_ids = 21;
+}
+
+message ReadMessagesRes {
+  uint64 total                        = 1;
+  PageMetadata page_metadata          = 2;
+  repeated Message messages           = 3;
+}
+
+message Message {
+  oneof payload {
+    SenMLMessage senml = 1;
+    JsonMessage json = 2;
+  }
+}
+
+message BaseMessage {
+  string channel = 1;
+  string subtopic = 2;
+  string publisher = 3;
+  string protocol = 4;
+  string device_id = 5;
+}
+
+message SenMLMessage {
+  BaseMessage base = 1;
+  string name = 2;
+  string unit = 3;
+  double time = 4;
+  double update_time = 5;
+  optional double value = 6;
+  optional string string_value = 7;
+  optional string data_value = 8;
+  optional bool bool_value = 9;
+  optional double sum = 10;
+}
+
+message JsonMessage {
+  BaseMessage base = 1;
+  int64 created = 2;
+  bytes payload = 3;
+}
+
+message ReadMessagesReq {
+  string channel_id                   = 1;
+  string workspace_id                    = 2;
+  PageMetadata page_metadata          = 3;
+}
+
+// DeviceStat is one row of the MG-15 observed-device aggregation: a distinct
+// identity (a device serial or a gateway's publisher id, depending on
+// direction) observed on a channel within a time range. last_seen carries
+// the same raw numeric time representation as the rest of this package
+// (see readers.DeviceStat in the Go package this mirrors), not a converted
+// timestamp.
+message DeviceStat {
+  string id                = 1;
+  double last_seen         = 2;
+  uint64 message_count     = 3;
+}
+
+message DeviceStatsRes {
+  uint64 total                     = 1;
+  PageMetadata page_metadata       = 2;
+  repeated DeviceStat stats        = 3;
+}
+
+message ListGatewayDevicesReq {
+  string workspace_id            = 1;
+  string channel_id           = 2;
+  string publisher_id         = 3;
+  PageMetadata page_metadata  = 4;
+}
+
+message ListDeviceGatewaysReq {
+  string workspace_id            = 1;
+  string channel_id           = 2;
+  string device_id            = 3;
+  PageMetadata page_metadata  = 4;
+}
+
+// Aggregation defines supported data aggregations.
+enum Aggregation {
+  AGGREGATION_UNSPECIFIED = 0;
+  AGGREGATION_MAX         = 1;
+  AGGREGATION_MIN         = 2;
+  AGGREGATION_SUM         = 3;
+  AGGREGATION_COUNT       = 4;
+  AGGREGATION_AVG         = 5;
+}

@@ -1,0 +1,259 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+// Package http exposes user-authenticated message publishing for the MG UI.
+package http
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/absmach/magistrala/pkg/atom"
+	smqauthn "github.com/absmach/magistrala/pkg/authn"
+	"github.com/absmach/magistrala/pkg/messaging"
+	"github.com/go-chi/chi/v5"
+)
+
+const (
+	contentType           = "application/json"
+	httpProto             = "http"
+	workspaceIDContextKey = "workspace_id"
+)
+
+type publishRequest struct {
+	DeviceID string          `json:"device_id"`
+	Subtopic string          `json:"subtopic"`
+	Payload  json.RawMessage `json:"payload"`
+}
+
+type publishResponse struct {
+	Status string `json:"status"`
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
+type publishHandler struct {
+	authn     smqauthn.Authentication
+	atom      *atom.Client
+	publisher messaging.Publisher
+}
+
+// MakePublishHandler returns an HTTP handler that authenticates the user with
+// Atom, authorizes publish access in Atom, and writes directly to the message
+// broker with the selected device as the publisher identity.
+func MakePublishHandler(
+	authn smqauthn.Authentication,
+	atomClient *atom.Client,
+	publisher messaging.Publisher,
+) http.Handler {
+	h := publishHandler{
+		authn:     authn,
+		atom:      atomClient,
+		publisher: publisher,
+	}
+	r := chi.NewRouter()
+	r.Post("/{workspaceID}/channels/{channelID}/messages", h.publish)
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(publishResponse{Status: "ok"}); err != nil {
+			return
+		}
+	})
+	return r
+}
+
+func (h publishHandler) publish(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspaceID")
+	channelID := chi.URLParam(r, "channelID")
+	if workspaceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "workspaceID and channelID are required")
+		return
+	}
+
+	token := bearerToken(r)
+	if token == "" {
+		writeError(w, http.StatusUnauthorized, "bearer token is required")
+		return
+	}
+	session, err := h.authn.Authenticate(r.Context(), token)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid bearer token")
+		return
+	}
+
+	var req publishRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid publish request")
+		return
+	}
+	payload, err := payloadBytes(req.Payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	publisherID := session.UserID
+	if req.DeviceID != "" {
+		if err := h.ensureDevicePublisher(r.Context(), workspaceID, channelID, session.UserID, req.DeviceID); err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		publisherID = req.DeviceID
+	}
+	if err := h.ensureUserPublish(r.Context(), workspaceID, channelID, session.UserID, req.DeviceID); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	subtopic := cleanSubtopic(req.Subtopic)
+	topic := messaging.EncodeTopicSuffix(workspaceID, channelID, subtopic)
+
+	msg := &messaging.Message{
+		Workspace: workspaceID,
+		Channel:   channelID,
+		Subtopic:  subtopic,
+		Publisher: publisherID,
+		ClientId:  session.UserID,
+		Protocol:  httpProto,
+		Payload:   payload,
+		Created:   time.Now().UnixNano(),
+	}
+	if err := h.publisher.Publish(r.Context(), topic, msg); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to publish message")
+		return
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusAccepted)
+	if err := json.NewEncoder(w).Encode(publishResponse{Status: "accepted"}); err != nil {
+		return
+	}
+}
+
+func (h publishHandler) ensureUserPublish(
+	ctx context.Context,
+	workspaceID string,
+	channelID string,
+	userID string,
+	deviceID string,
+) error {
+	res, err := h.atom.CheckAuthz(ctx, atom.AuthzRequest{
+		SubjectID:  userID,
+		Action:     "publish",
+		ResourceID: channelID,
+		ObjectKind: "resource",
+		ObjectID:   channelID,
+		Context: map[string]any{
+			workspaceIDContextKey: workspaceID,
+			"publisher_device_id": deviceID,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if !res.Allowed {
+		return fmt.Errorf("user is not allowed to publish to channel")
+	}
+	return nil
+}
+
+func (h publishHandler) ensureDevicePublisher(
+	ctx context.Context,
+	workspaceID string,
+	channelID string,
+	userID string,
+	deviceID string,
+) error {
+	device, err := h.atom.GetEntity(ctx, deviceID)
+	if err != nil {
+		return fmt.Errorf("publisher device not found")
+	}
+	if device.Kind != "device" && attrString(device.Attributes, "magistrala_kind") != atom.KindDevice {
+		return fmt.Errorf("publisher identity is not a device")
+	}
+	if device.TenantID == "" || device.TenantID != workspaceID {
+		return fmt.Errorf("publisher device belongs to a different workspace")
+	}
+	userAccess, err := h.atom.CheckAuthz(ctx, atom.AuthzRequest{
+		SubjectID:  userID,
+		Action:     "read",
+		ResourceID: deviceID,
+		ObjectKind: "entity",
+		ObjectID:   deviceID,
+		Context: map[string]any{
+			workspaceIDContextKey: workspaceID,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if !userAccess.Allowed {
+		return fmt.Errorf("user is not allowed to use publisher device")
+	}
+	res, err := h.atom.CheckAuthz(ctx, atom.AuthzRequest{
+		SubjectID:  deviceID,
+		Action:     "publish",
+		ResourceID: channelID,
+		ObjectKind: "resource",
+		ObjectID:   channelID,
+		Context: map[string]any{
+			workspaceIDContextKey: workspaceID,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if !res.Allowed {
+		return fmt.Errorf("publisher device is not connected for publish")
+	}
+	return nil
+}
+
+func bearerToken(r *http.Request) string {
+	token := r.Header.Get("Authorization")
+	return strings.TrimPrefix(token, "Bearer ")
+}
+
+func payloadBytes(raw json.RawMessage) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("payload is required")
+	}
+	if raw[0] == '"' {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, fmt.Errorf("payload must be a string or JSON value")
+		}
+		return []byte(value), nil
+	}
+	return raw, nil
+}
+
+func cleanSubtopic(subtopic string) string {
+	return strings.Trim(strings.ReplaceAll(subtopic, ".", "/"), "/")
+}
+
+func attrString(attrs atom.Attributes, key string) string {
+	value, ok := attrs[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if str, ok := value.(string); ok {
+		return str
+	}
+	return fmt.Sprint(value)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(errorResponse{Error: message}); err != nil {
+		return
+	}
+}

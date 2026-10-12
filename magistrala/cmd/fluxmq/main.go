@@ -1,0 +1,254 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+// Package main contains the FluxMQ auth bridge service entry point.
+// This service implements the FluxMQ auth callout server using ConnectRPC,
+// bridging authentication requests to Magistrala's Devices service and
+// authorization requests to Magistrala's Channels service.
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"connectrpc.com/connect"
+	"connectrpc.com/otelconnect"
+	"github.com/absmach/fluxmq/pkg/proto/auth/v1/authv1connect"
+	fluxmqgrpc "github.com/absmach/magistrala/fluxmq/api/grpc"
+	fluxmqhttp "github.com/absmach/magistrala/fluxmq/api/http"
+	mglog "github.com/absmach/magistrala/logger"
+	"github.com/absmach/magistrala/pkg/atom"
+	atomauthn "github.com/absmach/magistrala/pkg/authn/atom"
+	jaegerclient "github.com/absmach/magistrala/pkg/jaeger"
+	"github.com/absmach/magistrala/pkg/messaging"
+	fluxmqbroker "github.com/absmach/magistrala/pkg/messaging/fluxmq"
+	"github.com/absmach/magistrala/pkg/server"
+	httpserver "github.com/absmach/magistrala/pkg/server/http"
+	"github.com/absmach/magistrala/pkg/uuid"
+	"github.com/caarlos0/env/v11"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
+	"golang.org/x/sync/errgroup"
+)
+
+const (
+	svcName        = "fluxmq-auth"
+	defSvcGRPCPort = "7016"
+	envPrefixCache = "MG_FLUXMQ_CACHE_"
+	envPrefixGRPC  = "MG_FLUXMQ_GRPC_"
+	envPrefixHTTP  = "MG_FLUXMQ_PUBLISH_HTTP_"
+)
+
+type config struct {
+	LogLevel   string  `env:"MG_FLUXMQ_LOG_LEVEL"    envDefault:"info"`
+	BrokerURL  string  `env:"MG_MESSAGE_BROKER_URL"  envDefault:"amqp://guest:guest@localhost:5682/"`
+	JaegerURL  url.URL `env:"MG_JAEGER_URL"           envDefault:"http://localhost:4318/v1/traces"`
+	TraceRatio float64 `env:"MG_JAEGER_TRACE_RATIO"   envDefault:"1.0"`
+	InstanceID string  `env:"MG_FLUXMQ_INSTANCE_ID"   envDefault:""`
+	// The publish proxy states the origin of the message it relays: the
+	// protocol the user published with and the client it was published as.
+	// A broker stamps its own transport and identity on a publication from a
+	// connection it does not trust, which would store every message from this
+	// service as having arrived over AMQP. These point the publisher at the
+	// listener that accepts a relayed origin instead.
+	MsgBrokerURL     string `env:"MG_FLUXMQ_BROKER_URL"         envDefault:""`
+	BrokerClientCert string `env:"MG_FLUXMQ_BROKER_CLIENT_CERT" envDefault:""`
+	BrokerClientKey  string `env:"MG_FLUXMQ_BROKER_CLIENT_KEY"  envDefault:""`
+	BrokerCACerts    string `env:"MG_FLUXMQ_BROKER_CA_CERTS"    envDefault:""`
+}
+
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	g, ctx := errgroup.WithContext(ctx)
+
+	cfg := config{}
+	if err := env.Parse(&cfg); err != nil {
+		log.Fatalf("failed to load %s configuration: %s", svcName, err)
+	}
+
+	logger, err := mglog.New(os.Stdout, cfg.LogLevel)
+	if err != nil {
+		log.Fatalf("failed to init logger: %s", err.Error())
+	}
+
+	var exitCode int
+	defer mglog.ExitWithError(&exitCode)
+
+	if cfg.InstanceID == "" {
+		if cfg.InstanceID, err = uuid.New().ID(); err != nil {
+			logger.Error(fmt.Sprintf("failed to generate instanceID: %s", err))
+			exitCode = 1
+			return
+		}
+	}
+
+	tp, err := jaegerclient.NewProvider(ctx, svcName, cfg.JaegerURL, cfg.InstanceID, cfg.TraceRatio)
+	if err != nil {
+		logger.Error(fmt.Sprintf("failed to init Jaeger: %s", err))
+		exitCode = 1
+		return
+	}
+	defer func() {
+		if err := tp.Shutdown(ctx); err != nil {
+			logger.Error(fmt.Sprintf("error shutting down tracer provider: %v", err))
+		}
+	}()
+
+	atomCfg := atom.LoadConfig()
+	if atomCfg.URL == "" {
+		logger.Error("ATOM_URL is required")
+		exitCode = 1
+		return
+	}
+	atomAuthz := atom.NewClient(atomCfg)
+	authn := atomauthn.NewAuthentication()
+	clientsClient := atom.NewDevicesCompat(authn, atomAuthz)
+	workspacesClient := atom.NewWorkspacesCompat(atomAuthz)
+	channelsClient := atom.NewChannelsCompat(atomAuthz)
+	logger.Info("FluxMQ authentication, authorization, and route resolution configured to use Atom")
+
+	// Topic parser with cache for route resolution.
+	cacheConfig := messaging.CacheConfig{}
+	if err := env.ParseWithOptions(&cacheConfig, env.Options{Prefix: envPrefixCache}); err != nil {
+		logger.Error(fmt.Sprintf("failed to load cache configuration: %s", err))
+		exitCode = 1
+		return
+	}
+	parser, err := messaging.NewTopicParser(cacheConfig, channelsClient, workspacesClient)
+	if err != nil {
+		logger.Error(fmt.Sprintf("failed to create topic parser: %s", err))
+		exitCode = 1
+		return
+	}
+
+	// Start FluxMQ auth Connect/gRPC server over h2c.
+	grpcServerConfig := server.Config{Port: defSvcGRPCPort}
+	if err := env.ParseWithOptions(&grpcServerConfig, env.Options{Prefix: envPrefixGRPC}); err != nil {
+		logger.Error(fmt.Sprintf("failed to load gRPC server configuration: %s", err))
+		exitCode = 1
+		return
+	}
+
+	mux := http.NewServeMux()
+	otelInterceptor, err := otelconnect.NewInterceptor()
+	if err != nil {
+		logger.Error(fmt.Sprintf("failed to create OTel interceptor: %s", err))
+		exitCode = 1
+		return
+	}
+	path, handler := authv1connect.NewAuthServiceHandler(
+		fluxmqgrpc.NewServer(clientsClient, channelsClient, parser, atomAuthz),
+		connect.WithInterceptors(otelInterceptor),
+	)
+	mux.Handle(path, handler)
+	mux.Handle("/hooks", fluxmqhttp.MakeHooksHandler(parser))
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck // HTTP response write; client disconnect is non-fatal.
+	})
+
+	address := fmt.Sprintf("%s:%s", grpcServerConfig.Host, grpcServerConfig.Port)
+	httpServer := &http.Server{
+		Addr:              address,
+		Handler:           h2c.NewHandler(mux, &http2.Server{}),
+		ReadTimeout:       grpcServerConfig.ReadTimeout,
+		WriteTimeout:      grpcServerConfig.WriteTimeout,
+		ReadHeaderTimeout: grpcServerConfig.ReadHeaderTimeout,
+		IdleTimeout:       grpcServerConfig.IdleTimeout,
+		MaxHeaderBytes:    grpcServerConfig.MaxHeaderBytes,
+	}
+
+	// The mTLS client identity is optional: brokers that expose an
+	// unauthenticated listener need none. A partial configuration still fails,
+	// since half an identity is not a usable one.
+	publisherOpts := []messaging.Option{
+		fluxmqbroker.ConnectionName("fluxmq-ui-message-publish-proxy"),
+	}
+	msgBrokerURL := cfg.BrokerURL
+	if cfg.MsgBrokerURL != "" {
+		msgBrokerURL = cfg.MsgBrokerURL
+	}
+	if cfg.BrokerClientCert != "" || cfg.BrokerClientKey != "" || cfg.BrokerCACerts != "" {
+		publisherOpts = append(publisherOpts, fluxmqbroker.InternalMetadata(cfg.BrokerClientCert, cfg.BrokerClientKey, cfg.BrokerCACerts))
+	}
+
+	messagePublisher, err := fluxmqbroker.NewUndeclaredPublisher(ctx, msgBrokerURL, publisherOpts...)
+	if err != nil {
+		logger.Error(fmt.Sprintf("failed to create publish proxy message publisher: %s", err))
+		exitCode = 1
+		return
+	}
+	defer messagePublisher.Close()
+
+	httpServerConfig := server.Config{Port: "9026"}
+	if err := env.ParseWithOptions(&httpServerConfig, env.Options{Prefix: envPrefixHTTP}); err != nil {
+		logger.Error(fmt.Sprintf("failed to load publish proxy HTTP server configuration: %s", err))
+		exitCode = 1
+		return
+	}
+	hs := httpserver.NewServer(
+		ctx,
+		cancel,
+		"fluxmq-publish",
+		httpServerConfig,
+		fluxmqhttp.MakePublishHandler(authn, atomAuthz, messagePublisher),
+		logger,
+	)
+
+	g.Go(func() error {
+		logger.Info(fmt.Sprintf("%s service h2c server listening at %s", svcName, address))
+		var err error
+		switch {
+		case grpcServerConfig.CertFile != "" || grpcServerConfig.KeyFile != "":
+			err = httpServer.ListenAndServeTLS(grpcServerConfig.CertFile, grpcServerConfig.KeyFile)
+		default:
+			err = httpServer.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
+			cancel()
+			return err
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		return hs.Start()
+	})
+
+	g.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), server.StopWaitTime) //nolint:contextcheck
+		defer shutdownCancel()
+		if err := hs.Stop(); err != nil {
+			return fmt.Errorf("failed to shutdown publish proxy server: %w", err)
+		}
+		if err := httpServer.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck
+			return fmt.Errorf("failed to shutdown %s server: %w", svcName, err)
+		}
+		logger.Info(fmt.Sprintf("%s service shutdown at %s", svcName, address))
+		return nil
+	})
+
+	g.Go(func() error {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+		select {
+		case sig := <-c:
+			cancel()
+			logger.Info(fmt.Sprintf("%s service shutdown by signal: %s", svcName, sig))
+			return nil
+		case <-ctx.Done():
+			return nil
+		}
+	})
+
+	if err := g.Wait(); err != nil {
+		logger.Error(fmt.Sprintf("%s service terminated: %s", svcName, err))
+	}
+}

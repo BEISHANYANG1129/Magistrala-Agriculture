@@ -1,0 +1,28 @@
+{
+  "magistrala": {
+    "messagePort": 9011
+  },
+  "mapping": {
+    "path": "../data/device_registry.json"
+  },
+  "executor": {
+    "baseUrl": "http://127.0.0.1:8090"
+  },
+  "controlService": {
+    "baseUrl": "http://localhost:8280"
+  },
+  "llm": {
+    "endpoint": "http://localhost:11434",
+    "model": "gemma3:12b"
+  },
+  "prompt": {
+    "path": "config/prompts/llm_prompts.md"
+  },
+  "rag": {
+    "enabled": true,
+    "storePath": "config/knowledge/agri_knowledge.txt",
+    "topK": 3,
+    "ollamaEndpoint": "http://localhost:11434",
+    "ollamaModel": "nomic-embed-text"
+  }
+}

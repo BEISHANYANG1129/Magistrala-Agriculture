@@ -1,0 +1,12 @@
+{
+  "agriPlatform": {
+    "baseUrl": "http://api.farm.0531yun.cn",
+    "username": "",
+    "password": "",
+    "userToken": ""
+  },
+  "magistrala": {
+    "domainId": "",
+    "channelId": ""
+  }
+}

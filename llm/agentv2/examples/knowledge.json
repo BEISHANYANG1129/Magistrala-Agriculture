@@ -1,0 +1,11 @@
+[
+  {
+    "id": "demo-moisture-v1",
+    "source": "本项目演示说明；非农艺生产规则",
+    "text": "演示中的百分比阈值仅用于软件验证。真实灌溉应结合土壤、作物阶段和设备能力制定阈值。缺失或过期数据不作为当前控制依据。",
+    "metrics": [
+      "soil_moisture",
+      "soil_temperature"
+    ]
+  }
+]

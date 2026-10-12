@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+    <meta charset="UTF-8">
+    <title>智慧农业智能分析</title>
+    <style>
+        body { font-family: "Segoe UI", Arial, sans-serif; background: #f6f8fa; margin: 0; }
+        .container { max-width: 1100px; margin: 40px auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #eee; padding: 32px; }
+        h2 { margin-bottom: 24px; color: #2c3e50; }
+        table { width: 100%; border-collapse: collapse; background: #fff; }
+        th, td { padding: 12px 8px; border-bottom: 1px solid #eaeaea; text-align: left; }
+        th { background: #f0f4f8; color: #34495e; font-weight: 600; }
+        tr:hover { background: #f9fafb; }
+        img.msg-img { max-width: 180px; max-height: 120px; border-radius: 4px; cursor: pointer; transition: box-shadow 0.2s; }
+        img.msg-img:hover { box-shadow: 0 0 8px #2980b9; }
+        .msg-text { font-size: 15px; color: #333; }
+        .pagination { margin: 24px 0 0 0; text-align: right; }
+        .pagination button { margin: 0 4px; padding: 6px 12px; border: none; background: #2980b9; color: #fff; border-radius: 4px; cursor: pointer; }
+        .pagination button:disabled { background: #ccc; cursor: not-allowed; }
+        .btn { padding: 8px 18px; background: #2980b9; color: #fff; border: none; border-radius: 4px; cursor: pointer; margin: 16px 0; }
+        .result { background: #f8fafd; border-radius: 6px; padding: 18px; margin-top: 24px; box-shadow: 0 1px 4px #eee; }
+        .result h3 { margin-top: 0; }
+        .modal { display: none; position: fixed; z-index: 999; left: 0; top: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; }
+        .modal img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>智能分析 - 消息选择</h2>
+        <table id="msg-table">
+            <thead>
+                <tr>
+                    <th>选择</th>
+                    <th>Publisher</th>
+                    <th>Subtopic</th>
+                    <th>Protocol</th>
+                    <th>Name</th>
+                    <th>Unit</th>
+                    <th>内容</th>
+                    <th>时间</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        <div class="pagination">
+            <button id="prev-btn">上一页</button>
+            <span id="page-info"></span>
+            <button id="next-btn">下一页</button>
+        </div>
+        <button class="btn" id="analyze-btn">智能分析</button>
+        <div class="result" id="llm-result" style="display:none"></div>
+    </div>
+    <!-- 图片放大弹窗 -->
+    <div class="modal" id="img-modal" onclick="this.style.display='none'">
+        <img id="modal-img" src="" alt="放大图片">
+    </div>
+    <script>
+    // 配置
+    const clientSecret = "4fa8890c-5888-48ba-93b8-3e7db1165b65";
+    const domainID = "562d704a-c442-499a-aff3-223f580bf6b3";
+    const channelID = "b0ec13df-9ff0-48b9-9cb6-b3be072e7c99";
+    const apiBase = `http://localhost:8090/api/${domainID}/channels/${channelID}/messages`;
+    const analyzeApi = "http://localhost:8091/analyze";
+    let offset = 0;
+    const limit = 10;
+    let total = 0;
+    let currentMessages = [];
+
+    function formatTime(ts) {
+        if (!ts) return "";
+        let date = new Date(Number(ts) / 1e6);
+        return date.toLocaleString();
+    }
+
+    function showModal(src) {
+        const modal = document.getElementById('img-modal');
+        const modalImg = document.getElementById('modal-img');
+        modalImg.src = src;
+        modal.style.display = 'flex';
+    }
+
+    function loadMessages() {
+        const url = `${apiBase}?offset=${offset}&limit=${limit}`;
+        fetch(url, {
+            headers: {
+                "Authorization": "Client " + clientSecret
+            }
+        })
+        .then(res => res.json())
+        .then(data => {
+            total = data.total || 0;
+            currentMessages = data.messages || [];
+            const tbody = document.querySelector('#msg-table tbody');
+            tbody.innerHTML = "";
+            currentMessages.forEach((msg, idx) => {
+                const tr = document.createElement('tr');
+                let content = "";
+                if (msg.string_value && /^https?:\/\/.+\.(png|jpg|jpeg|gif|bmp)$/i.test(msg.string_value)) {
+                    content = `<img class="msg-img" src="${msg.string_value}" alt="图片" onclick="showModal('${msg.string_value}')">`;
+                } else if (msg.value !== undefined) {
+                    content = `<span class="msg-text">${msg.value}</span>`;
+                } else if (msg.string_value) {
+                    content = `<span class="msg-text">${msg.string_value}</span>`;
+                }
+                tr.innerHTML = `
+                    <td><input type="checkbox" class="msg-select" data-idx="${idx}" checked></td>
+                    <td>${msg.publisher || ""}</td>
+                    <td>${msg.subtopic || ""}</td>
+                    <td>${msg.protocol || ""}</td>
+                    <td>${msg.name || ""}</td>
+                    <td>${msg.unit || ""}</td>
+                    <td>${content}</td>
+                    <td>${formatTime(msg.time)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+            updatePagination();
+        })
+        .catch(err => {
+            const tbody = document.querySelector('#msg-table tbody');
+            tbody.innerHTML = `<tr><td colspan="8">消息加载失败: ${err}</td></tr>`;
+        });
+    }
+
+    function updatePagination() {
+        const pageInfo = document.getElementById('page-info');
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        const currentPage = Math.floor(offset / limit) + 1;
+        const totalPages = Math.ceil(total / limit);
+        pageInfo.textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页`;
+        prevBtn.disabled = offset === 0;
+        nextBtn.disabled = offset + limit >= total;
+    }
+
+    document.getElementById('prev-btn').onclick = function() {
+        if (offset >= limit) {
+            offset -= limit;
+            loadMessages();
+        }
+    };
+    document.getElementById('next-btn').onclick = function() {
+        if (offset + limit < total) {
+            offset += limit;
+            loadMessages();
+        }
+    };
+
+    // 智能分析按钮
+    document.getElementById('analyze-btn').onclick = function() {
+        const tbody = document.querySelector('#msg-table tbody');
+        const rows = tbody.querySelectorAll('tr');
+        let selectedMessages = [];
+        rows.forEach((tr, idx) => {
+            const cb = tr.querySelector('input[type=checkbox]');
+            if (cb && cb.checked) {
+                // 只取后端需要的字段
+                const msg = currentMessages[idx];
+                // 只保留 name、unit、value、string_value 字段
+                let obj = {
+                    name: msg.name,
+                    unit: msg.unit
+                };
+                if (msg.value !== undefined) obj.value = msg.value;
+                if (msg.string_value) obj.string_value = msg.string_value;
+                selectedMessages.push(obj);
+            }
+        });
+        if (selectedMessages.length === 0) {
+            alert("请至少选择一条消息进行分析！");
+            return;
+        }
+        // 调用后端 LLM 分析接口
+        document.getElementById('llm-result').innerHTML = "分析中，请稍候...";
+        document.getElementById('llm-result').style.display = "block";
+        fetch(analyzeApi, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: selectedMessages })
+        })
+        .then(res => res.json())
+        .then(data => {
+            const resultDiv = document.getElementById('llm-result');
+            if (data.summary || data.diagnosis) {
+                resultDiv.innerHTML = `
+                    <h3>智能分析结果</h3>
+                    <b>一句话总结：</b>${data.summary || ""}<br>
+                    <b>诊断：</b>${data.diagnosis || ""}<br>
+                    <b>风险：</b>${(data.risks||[]).join("，")}<br>
+                    <b>建议：</b>${(data.suggestions||[]).join("，")}<br>
+                    <b>详细分析：</b>${data.raw_analysis || ""}
+                `;
+                resultDiv.style.display = "block";
+            } else {
+                resultDiv.innerHTML = "分析失败或无结果";
+                resultDiv.style.display = "block";
+            }
+        })
+        .catch(err => {
+            document.getElementById('llm-result').innerHTML = "分析失败: " + err;
+            document.getElementById('llm-result').style.display = "block";
+        });
+    };
+
+    // 首次加载
+    loadMessages();
+    </script>
+</body>
+</html>

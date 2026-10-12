@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>农田设备拓扑设置与展示</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
+  <style>
+    #topology {
+      width: 800px;
+      height: 600px;
+      position: relative;
+      overflow: hidden;
+    }
+    #bg {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 0;
+      cursor: crosshair;
+      opacity: 1;
+      display: block;
+      object-fit: fill;
+    }
+    #echarts-canvas {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    #selected-point {
+      position: absolute;
+      display: none;
+      z-index: 2;
+      color: red;
+      font-weight: bold;
+      text-align: center;
+      pointer-events: none;
+    }
+    #device-form {
+      margin-top: 20px;
+    }
+    #device-list {
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    .btn {
+      margin-top: 10px;
+      padding: 6px 12px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h2>农田设备拓扑设置与展示</h2>
+  <div id="topology">
+    <img id="bg" src="../OIP-C.jpeg" alt="farm map">
+    <div id="echarts-canvas"></div>
+    <div id="selected-point"></div>
+  </div>
+  <div id="device-form">
+    <b>添加设备：</b><br>
+    类型: 
+    <select id="type">
+      <option value="irrigation">灌溉设备</option>
+      <option value="sensor">传感器</option>
+    </select>
+    区域: <input id="area" value="A区" size="4">
+    设备ID: <input id="device_id" value="device_1" size="8">
+    <button class="btn" onclick="setMode()">点击底图设置坐标</button>
+    <span id="set-tip" style="color:green;"></span>
+    <button class="btn" onclick="addDevice()">添加设备</button>
+  </div>
+  <div id="device-list"></div>
+  <button class="btn" onclick="drawTopology()">绘制拓扑图</button>
+
+  <script>
+    let devices = [];
+    let setLocationMode = false;
+    let tempDevice = {};
+
+    function setMode() {
+      setLocationMode = true;
+      document.getElementById('set-tip').innerText = "请在底图上点击设置设备坐标";
+    }
+
+    // 选点后不关闭模式
+    document.getElementById('topology').onclick = function(e) {
+      if (!setLocationMode) return;
+      const bg = document.getElementById('bg');
+      const rect = bg.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      tempDevice.location = {x, y};
+      document.getElementById('set-tip').innerText = `已设置坐标: (${(x*100).toFixed(1)}%, ${(y*100).toFixed(1)}%)`;
+
+      // 每次点击都更新标点和标签
+      const px = x * bg.offsetWidth;
+      const py = y * bg.offsetHeight;
+      const label = document.getElementById('selected-point');
+      label.style.left = `${px-10}px`;
+      label.style.top = `${py-30}px`;
+      label.innerHTML = `<span style="font-size:18px;">●</span><br>(${(x*100).toFixed(1)}%, ${(y*100).toFixed(1)}%)`;
+      label.style.display = "block";
+    };
+
+    // 添加设备后自动恢复选点模式
+    function addDevice() {
+      const type = document.getElementById('type').value;
+      const area = document.getElementById('area').value;
+      const device_id = document.getElementById('device_id').value;
+      if (!tempDevice.location) {
+        alert("请先点击底图设置设备坐标！");
+        return;
+      }
+      // 检查 device_id 是否已存在
+      if (devices.some(d => d.device_id === device_id)) {
+        alert("设备ID已存在，请输入唯一的设备ID！");
+        return;
+      }
+      devices.push({
+        device_id,
+        type,
+        area,
+        location: tempDevice.location,
+        connections: []
+      });
+      tempDevice = {};
+      document.getElementById('selected-point').style.display = "none";
+      document.getElementById('set-tip').innerText = "";
+      setLocationMode = false;
+      showDeviceList();
+    }
+
+    function showDeviceList() {
+      let html = "<b>设备列表：</b><ul>";
+      devices.forEach((d, i) => {
+        html += `<li>${d.device_id} [${d.type}] 区域:${d.area} 坐标:(${(d.location.x*100).toFixed(1)}%, ${(d.location.y*100).toFixed(1)}%)</li>`;
+      });
+      html += "</ul>";
+      document.getElementById('device-list').innerHTML = html;
+    }
+
+    function drawTopology() {
+      if (devices.length === 0) {
+        alert("请先添加设备！");
+        return;
+      }
+      const bg = document.getElementById('bg');
+      const width = bg.offsetWidth, height = bg.offsetHeight;
+
+      // 清空画布，防止多次绘制重叠
+      document.getElementById('echarts-canvas').innerHTML = "";
+
+      const nodes = devices.map(d => ({
+        id: d.device_id,
+        name: d.device_id,
+        category: d.type,
+        x: d.location.x * width,
+        y: d.location.y * height,
+        symbolSize: 40
+      }));
+      const links = [];
+      for (let i = 0; i < devices.length - 1; i++) {
+        links.push({source: devices[i].device_id, target: devices[i+1].device_id});
+      }
+      const categories = [
+        {name: 'irrigation'},
+        {name: 'sensor'}
+      ];
+      const option = {
+        title: {text: '农田物理拓扑结构'},
+        legend: [{data: categories.map(c => c.name)}],
+        series: [{
+          type: 'graph',
+          layout: 'none',
+          data: nodes,
+          links: links,
+          categories: categories,
+          roam: true,
+          label: {show: true},
+          edgeSymbol: ['circle', 'arrow'],
+          edgeSymbolSize: [4, 10],
+          lineStyle: {color: 'source', curveness: 0.2}
+        }]
+      };
+      const chart = echarts.init(document.getElementById('echarts-canvas'));
+      chart.setOption(option);
+    }
+  </script>
+</body>
+</html>

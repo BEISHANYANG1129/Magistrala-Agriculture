@@ -1,0 +1,6 @@
+/bin/
+/runtime/
+__pycache__/
+/config.local.json
+/registry.local.json
+/knowledge.local.json

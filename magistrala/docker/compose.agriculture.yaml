@@ -1,0 +1,52 @@
+services:
+  atom-db:
+    healthcheck:
+      start_period: 30s
+      retries: 30
+  bootstrap-db:
+    healthcheck:
+      start_period: 30s
+      retries: 30
+  ui-backend-db:
+    healthcheck:
+      start_period: 30s
+      retries: 30
+  timescale:
+    healthcheck:
+      start_period: 30s
+      retries: 60
+  agriculture:
+    image: magistrala-agriculture:local
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${AGRI_BIND_HOST:-127.0.0.1}:${AGRI_PUBLIC_PORT:-5173}:5173"
+    environment:
+      AGRI_ATOM_URL: http://atom:8080
+      AGRI_GATEWAY_URL: http://nginx:80
+      AGRI_READER_URL: http://timescale-reader:9011
+      AGRI_RULES_URL: http://re:9008
+      AGRI_ALARMS_URL: http://alarms:8050
+      AGRI_REPORTS_URL: http://reports:9017
+      AGRI_BOOTSTRAP_URL: http://bootstrap:9013
+      AGRI_UI_BACKEND_URL: http://ui-backend:9097
+      AGRI_COOKIE_SECURE: ${AGRI_COOKIE_SECURE:-false}
+    depends_on:
+      atom:
+        condition: service_started
+      timescale-reader:
+        condition: service_started
+    volumes:
+      - agriculture-state:/state
+    networks:
+      - magistrala-base-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  agriculture-state:

@@ -1,0 +1,77 @@
+# Copyright (c) Abstract Machines
+# SPDX-License-Identifier: Apache-2.0
+
+pkgname: mocks
+template: testify
+structname: "{{.InterfaceName}}"
+filename: "{{snakecase .InterfaceName}}.go"
+dir: "{{.InterfaceDirRelative}}/mocks"
+template-data:
+  boilerplate-file: ./tools/config/boilerplate.txt
+force-file-write: true
+include-auto-generated: true
+
+packages:
+  github.com/absmach/magistrala/api/grpc/certs/v1:
+    interfaces:
+      CertsServiceClient:
+        config:
+          dir: "./certs/mocks"
+          structname: "CertsServiceClient"
+          filename: "certs_client.go"
+  github.com/absmach/magistrala/api/grpc/readers/v1:
+    interfaces:
+      ReadersServiceClient:
+        config:
+          dir: "./readers/mocks"
+          structname: "ReadersServiceClient"
+          filename: "readers_client.go"
+  github.com/absmach/magistrala/pkg/sdk:
+    interfaces:
+      SDK:
+        config:
+          dir: "./pkg/sdk/mocks"
+          structname: "SDK"
+          filename: "sdk.go"
+  github.com/absmach/magistrala/certs:
+    interfaces:
+      Agent:
+      Service:
+      Repository:
+  github.com/absmach/magistrala/consumers:
+    interfaces:
+      Notifier:
+  github.com/absmach/magistrala/consumers/notifiers:
+    interfaces:
+      Service:
+      SubscriptionsRepository:
+  github.com/absmach/magistrala/pkg/authn:
+    interfaces:
+      Authentication:
+      AuthNMiddleware:
+  github.com/absmach/magistrala/pkg/authz:
+    interfaces:
+      Authorization:
+  github.com/absmach/magistrala/pkg/emailer:
+    interfaces:
+      Emailer:
+  github.com/absmach/magistrala/pkg/events:
+    interfaces:
+      Publisher:
+      Subscriber:
+  github.com/absmach/magistrala/pkg/messaging:
+    interfaces:
+      PubSub:
+  github.com/absmach/magistrala/pkg/policies:
+    interfaces:
+      Evaluator:
+      Service:
+  github.com/absmach/magistrala/pkg/callout:
+    interfaces:
+      Callout:
+  github.com/absmach/magistrala/pkg/ticker:
+    interfaces:
+      Ticker:
+  github.com/absmach/magistrala/readers:
+    interfaces:
+      MessageRepository:

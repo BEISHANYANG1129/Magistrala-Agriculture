@@ -1,0 +1,37 @@
+{
+  "version": "demo-v1",
+  "regions": [
+    {
+      "id": "north",
+      "name": "北区 · 演示",
+      "workspace_id": "demo-farm",
+      "sensors": [
+        {
+          "channel_id": "telemetry",
+          "publisher_id": "sensor-north"
+        }
+      ],
+      "executors": [
+        "valve-north"
+      ],
+      "soil_moisture_min": 20,
+      "irrigation_duration_min": 5
+    },
+    {
+      "id": "south",
+      "name": "南区 · 演示",
+      "workspace_id": "demo-farm",
+      "sensors": [
+        {
+          "channel_id": "telemetry",
+          "publisher_id": "sensor-south"
+        }
+      ],
+      "executors": [
+        "valve-south"
+      ],
+      "soil_moisture_min": 20,
+      "irrigation_duration_min": 5
+    }
+  ]
+}

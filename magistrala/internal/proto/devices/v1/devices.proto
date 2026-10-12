@@ -1,0 +1,62 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package devices.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/absmach/magistrala/api/grpc/devices/v1";
+
+// DevicesService is a service that provides devices
+// authorization functionalities for Magistrala services.
+service DevicesService {
+  // Authorize checks if the device is authorized to perform
+  rpc Authenticate(AuthnReq)
+    returns (AuthnRes) {}
+
+  rpc RetrieveEntity(common.v1.RetrieveEntityReq)
+    returns (common.v1.RetrieveEntityRes) {}
+
+  rpc RetrieveEntities(common.v1.RetrieveEntitiesReq)
+    returns (common.v1.RetrieveEntitiesRes) {}
+
+  rpc AddConnections(common.v1.AddConnectionsReq)
+    returns(common.v1.AddConnectionsRes) {}
+
+  rpc RemoveConnections(common.v1.RemoveConnectionsReq)
+    returns(common.v1.RemoveConnectionsRes) {}
+
+  rpc RemoveChannelConnections(RemoveChannelConnectionsReq)
+    returns(RemoveChannelConnectionsRes) {}
+
+  rpc UnsetParentGroupFromDevice(UnsetParentGroupFromDeviceReq)
+    returns(UnsetParentGroupFromDeviceRes){}
+}
+
+
+message AuthnReq {
+  string token = 1;
+}
+
+message AuthnRes {
+  bool authenticated = 1;
+  string id = 2;
+}
+
+message RemoveChannelConnectionsReq {
+  string channel_id = 1;
+}
+
+message RemoveChannelConnectionsRes {
+
+}
+
+message UnsetParentGroupFromDeviceReq {
+  string parent_group_id = 1;
+}
+
+message UnsetParentGroupFromDeviceRes {
+
+}

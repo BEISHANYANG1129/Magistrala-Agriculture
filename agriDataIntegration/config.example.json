@@ -1,0 +1,24 @@
+{
+  "agriPlatform": {
+    "baseUrl": "http://www.0531yun.com",
+    "username": "",
+    "password": ""
+  },
+  "magistrala": {
+    "domainId": "",
+    "channelId": "",
+    "channelPort": "9005",
+    "clientPort": "9006",
+    "messagePort": "9011"
+  },
+  "integration": {
+    "syncInterval": 30,
+    "mappingFile": "sensor_mapping.json",
+    "backgroundImage": "farm_layout.jpg",
+    "defaultPartition": "field_1"
+  },
+  "server": {
+    "port": "8889",
+    "host": "0.0.0.0"
+  }
+}

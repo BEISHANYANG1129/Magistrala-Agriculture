@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>区域分析工作台 · Go Agent</title>
+<style>
+:root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#18332a;background:#f2f5ef}*{box-sizing:border-box}body{margin:0}header{background:#173e32;color:white;padding:28px 5vw}header p{color:#c8dfd0;margin-bottom:0}.label{font-size:12px;letter-spacing:2px;color:#d8e5a9}h1{font-size:30px;margin:10px 0}main{max-width:1240px;margin:30px auto;padding:0 24px}.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}select,button,input,textarea{font:inherit;border:1px solid #bdcfc3;border-radius:8px;padding:10px 12px}button{background:#255f47;color:white;cursor:pointer}button.secondary{background:white;color:#255f47}button:disabled{opacity:.5;cursor:default}select{flex:1;min-width:190px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px}section{background:white;padding:24px;border:1px solid #dbe3d8;border-radius:12px}h2{font-size:18px;margin-top:0}.muted{color:#617469;font-size:14px}.badge{background:#e9f0d2;border-radius:20px;color:#334727;padding:5px 12px;font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;background:#f4f6f3;padding:12px;max-height:300px;overflow:auto}#notice{padding:14px 0;min-height:45px}ol{padding-left:20px}li{margin:10px 0}#findings p{border-left:3px solid #8fab79;padding-left:12px}.wide{grid-column:1/-1}.lines{white-space:pre-line;overflow-wrap:anywhere}label{display:block;font-size:14px}label input,label textarea{display:block;width:100%;margin-top:7px}textarea{min-height:85px}#editor .grid{margin:0 0 18px}#history{display:flex;gap:10px;flex-wrap:wrap}#history button{text-align:left;max-width:360px}.status{padding:12px;background:#edf4ee;border-radius:8px}details{margin-top:14px}summary{cursor:pointer}#editor[hidden]{display:none}.error{color:#ae3227}input:read-only{background:#eef1ed}@media(max-width:760px){.grid{grid-template-columns:1fr}h1{font-size:24px}main{padding:0 14px}}
+</style>
+<header><div class="label">MAGISTRALA / AGRICULTURE LAB</div><h1>按区域分析，让依据可追溯</h1><p>管理区域、核对证据、验证控制流程 · 所有设备执行均为模拟</p></header>
+<main>
+<div class="bar"><select id="region" aria-label="分析区域"></select><button id="analyze">分析当前区域</button><button id="simulate" disabled>模拟执行建议</button><span id="mode" class="badge">加载中</span></div>
+<div id="notice" role="status" aria-live="polite">正在读取区域配置…</div>
+<div class="bar"><button id="edit" class="secondary" disabled>编辑当前区域</button><button id="create" class="secondary" disabled>新增区域</button><button id="refresh" class="secondary">刷新配置与记录</button></div>
+<section id="editor" hidden style="margin-top:20px"><h2 id="editorTitle">区域配置</h2>
+<form id="regionForm"><div class="grid">
+<label>区域名称<input id="regionName" required maxlength="120"></label>
+<label>区域 ID<input id="regionID" required maxlength="120"></label>
+<label>工作区 ID<input id="workspaceID" required maxlength="120"></label>
+<label>低湿度阈值（%，留空则只做观察）<input id="threshold" type="number" min="0" max="100" step="any"></label>
+<label>传感器绑定（每行：通道 ID, 设备 ID）<textarea id="sensors" required></textarea></label>
+<label>执行设备（每行一个 ID，可留空）<textarea id="executors"></textarea></label>
+<label>模拟灌溉时长（分钟，留空则不允许模拟执行）<input id="duration" type="number" min="0.001" max="60" step="any"></label>
+</div><p class="muted">配置只保存到此独立实例。保存后，旧分析不能用于新的执行。阈值和时长需由现场策略确定，演示值不代表农艺建议。</p>
+<div class="bar"><button id="save" type="submit">保存区域配置</button><button id="cancel" type="button" class="secondary">取消</button></div></form></section>
+<div class="grid">
+<section><h2>区域与设备绑定</h2><div id="binding" class="lines"></div></section>
+<section><h2>本次分析</h2><div id="summary" class="muted lines">选择区域后开始。模型不会直接获得设备控制权限。</div></section>
+<section><h2>分析依据</h2><div id="evidence" class="muted">尚无数据</div></section>
+<section><h2>发现与知识来源</h2><div id="findings" class="muted">尚无结果</div></section>
+<section><h2>处理轨迹</h2><ol id="trace"></ol></section>
+<section><h2>控制计划与模拟回执</h2><div id="execution" class="status">尚未生成建议</div><details><summary>查看完整任务与回执</summary><pre id="tasks">[]</pre></details></section>
+<section class="wide"><h2>当前区域的分析记录</h2><p class="muted">按区域筛选。查看历史结果不会重新运行模型或发送任务。</p><div id="history"></div></section>
+</div><p id="storageNote" class="muted">配置、分析历史和模拟控制均独立于旧服务。</p>
+</main><script src="/app.js"></script></html>
