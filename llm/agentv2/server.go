@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"magistrala-agri-agent/workbench"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,6 +22,7 @@ type Server struct {
 	Platform        *PlatformAuth
 	Control         SimulationControl
 	EditableRegions bool
+	Workbench       *workbench.Service
 	stateDir        string
 	gate            chan struct{}
 	mu              sync.Mutex
@@ -50,6 +52,17 @@ func fail(w http.ResponseWriter, status int, err error) {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/workbench/", func(w http.ResponseWriter, r *http.Request) {
+		if s.Workbench == nil {
+			fail(w, 503, fmt.Errorf("workbench is not configured"))
+			return
+		}
+		workspace := requestWorkspace(r.Context())
+		if s.Platform == nil {
+			workspace = r.Header.Get("X-Workspace-ID")
+		}
+		s.Workbench.Handle(w, r, workspace, r.Header.Get("Authorization"))
+	})
 	mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := assets.ReadFile("web/app.js")
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")

@@ -5,7 +5,7 @@
       >{{ tr('名称', 'Name') }} *<input v-model="name" required :disabled="!!created" autofocus
     /></label>
     <template v-if="isDevice">
-      <label class="field"
+      <label v-if="!cameraDevice" class="field"
         >{{ tr('设备密钥（留空自动生成）', 'Key (generated if empty)')
         }}<input v-model="key" type="password" autocomplete="new-password" :disabled="!!created"
       /></label>
@@ -91,6 +91,7 @@ import { ref, computed, onMounted } from 'vue'
 import { tr, sectionLabel } from '../i18n'
 import { runOperation, listAll, errorText } from '../api/platform'
 import { resourceConfig } from '../api/resourceWorkflow'
+import { cameraConfig } from '../api/camera'
 const props = defineProps({
   section: String,
   workspace: String,
@@ -117,6 +118,10 @@ const name = ref(props.initial ? `${props.initial.name} (copy)` : ''),
 let keyDone = false,
   groupDone = false
 const isDevice = computed(() => ['devices', 'gateways'].includes(props.section))
+const cameraDevice = computed(() => {
+  try { return cameraConfig({ attributes: { metadata: JSON.parse(metadata.value) } }) }
+  catch { return null }
+})
 function addTag() {
   if (tagInput.value.trim() && !tags.value.includes(tagInput.value.trim()))
     tags.value.push(tagInput.value.trim())
@@ -158,7 +163,7 @@ async function save() {
         Object.assign(input.attributes, {
           is_gateway: gateway.value,
           gateways: gatewayIds.value,
-          profile: 'client',
+          profile: cameraDevice.value ? 'camera' : 'client',
         })
         if (serial.value) input.externalId = serial.value
         if (profileId.value) input.profileId = profileId.value
@@ -173,7 +178,7 @@ async function save() {
       }
       created.value = await runOperation('create' + c.type, { input })
     }
-    if (isDevice.value && !keyDone) {
+    if (isDevice.value && !keyDone && !cameraDevice.value) {
       await runOperation('createSharedKey', {
         entityId: created.value.id,
         input: key.value ? { key: key.value } : {},

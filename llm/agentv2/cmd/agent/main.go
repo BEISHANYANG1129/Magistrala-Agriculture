@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	agent "magistrala-agri-agent"
+	"magistrala-agri-agent/workbench"
 )
 
 func main() {
@@ -18,6 +21,7 @@ func main() {
 	knowledge := flag.String("knowledge", "examples/knowledge.json", "curated knowledge JSON")
 	mode := flag.String("mode", "demo", "demo, reader-demo or ollama")
 	reader := flag.String("reader", "", "explicit Magistrala Reader base URL")
+	alarmsURL := flag.String("alarms-url", "", "platform alarms service base URL for automatic workbench queries")
 	timeUnit := flag.String("time-unit", "seconds", "seconds or nanoseconds (match deployed Reader)")
 	model := flag.String("model", "", "explicit Ollama model, no automatic pulls")
 	ollamaURL := flag.String("ollama-url", "http://127.0.0.1:11434", "Ollama base URL")
@@ -27,6 +31,15 @@ func main() {
 	platformURL := flag.String("platform-url", "", "Atom URL; authenticate integrated UI requests and use caller Reader credentials")
 	guardPython := flag.String("gpu-python", "python", "Python executable for GPU guard")
 	guardScript := flag.String("gpu-guard", "scripts/evaluate_model.py", "GPU idle checker; required before integrated real inference")
+	workbenchData := flag.String("workbench-data", "", "optional imported historical replay JSON")
+	workbenchKnowledge := flag.String("workbench-knowledge", "examples/workbench-knowledge.json", "workbench knowledge chunks")
+	workbenchPhotos := flag.String("workbench-photo-sources", "examples/workbench-photo-sources.json", "registered read-only camera message sources")
+	workbenchCameras := flag.String("workbench-camera-sources", "examples/workbench-camera-sources.json", "registered camera control platform objects")
+	cameraGateway := flag.String("camera-gateway-url", "http://127.0.0.1:5173", "authenticated loopback platform camera gateway")
+	workbenchModel := flag.String("workbench-model", workbench.DefaultModel, "default workbench model; never automatically downloaded")
+	workbenchPreview := flag.Bool("workbench-preview", false, "disable workbench inference, expose evidence and retrieval only")
+	timeRecognizer := flag.String("time-recognizer", "time-recognizer/index.cjs", "local Microsoft Recognizers Text adapter")
+	node := flag.String("node", "node", "Node.js executable for local time recognition")
 	flag.Parse()
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil {
@@ -79,7 +92,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("agent ready http://%s mode=%s execution=simulation_only", ln.Addr(), *mode)
 	handler := agent.NewServer(engine)
 	if *stateDir != "" {
 		handler, err = agent.NewPersistentServer(engine, *stateDir)
@@ -91,6 +103,32 @@ func main() {
 	if *platformURL != "" {
 		handler.Platform = &agent.PlatformAuth{URL: *platformURL}
 	}
-	srv := &http.Server{Handler: handler.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 130 * time.Second, IdleTimeout: 30 * time.Second}
+	photos, err := workbench.LoadPhotoSources(*workbenchPhotos)
+	if err != nil {
+		log.Fatal(err)
+	}
+	wcfg := workbench.Config{DatasetPath: *workbenchData, KnowledgePath: *workbenchKnowledge, ModelName: *workbenchModel, PhotoSources: photos}
+	wcfg.CameraSources, err = workbench.LoadCameraSources(*workbenchCameras)
+	if err != nil {
+		log.Fatal(err)
+	}
+	wcfg.CameraGatewayURL = *cameraGateway
+	if *platformURL != "" && !*workbenchPreview {
+		wcfg.TimeRecognizer = &workbench.TimeRecognizer{Node: *node, Script: *timeRecognizer}
+		if _, err := wcfg.TimeRecognizer.Recognize(context.Background(), "今天", time.Now(), time.Now()); err != nil {
+			log.Printf("workbench QA time recognizer unavailable: %v", err)
+		}
+	}
+	if *stateDir != "" {
+		wcfg.StateDir = filepath.Join(*stateDir, "workbench")
+	}
+	if !*workbenchPreview {
+		wcfg.Model = &workbench.Ollama{URL: *ollamaURL, Name: *workbenchModel, Python: *guardPython, Guard: *guardScript}
+	}
+	if err = handler.EnableWorkbench(wcfg, *reader, *timeUnit, *alarmsURL); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("agent ready http://%s mode=%s valve_execution=simulation_only camera_control=confirmed_bounded_plan", ln.Addr(), *mode)
+	srv := &http.Server{Handler: handler.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 615 * time.Second, IdleTimeout: 30 * time.Second}
 	log.Fatal(srv.Serve(ln))
 }

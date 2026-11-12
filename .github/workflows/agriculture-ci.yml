@@ -24,9 +24,11 @@ jobs:
       - name: Frontend workflows
         working-directory: magistrala-ui
         run: npx vitest run
-      - name: Encrypted session service
+      - name: Session, agent proxy and camera services
         working-directory: magistrala-ui
-        run: node --test server/session-server.test.mjs
+        run: node --test server/*.test.mjs
+      - name: Install Chinese time recognition component
+        run: npm ci --prefix llm/agentv2/time-recognizer --ignore-scripts
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.13'

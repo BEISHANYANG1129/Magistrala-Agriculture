@@ -58,7 +58,7 @@ func NewRetriever(cfg RAGConfig) *Retriever {
 	}
 	r := &Retriever{
 		cfg:  cfg,
-		docs: docs,
+		docs: []string{},
 		hc:   &http.Client{Timeout: 20 * time.Second},
 	}
 	for _, d := range docs {
@@ -67,14 +67,7 @@ func NewRetriever(cfg RAGConfig) *Retriever {
 			continue
 		}
 		r.vecs = append(r.vecs, vec)
-	}
-	// 若有失败的段落，保持长度对齐
-	if len(r.vecs) != len(r.docs) {
-		nd := make([]string, 0, len(r.vecs))
-		for i := range r.vecs {
-			nd = append(nd, r.docs[i])
-		}
-		r.docs = nd
+		r.docs = append(r.docs, d)
 	}
 	if len(r.docs) == 0 {
 		return nil

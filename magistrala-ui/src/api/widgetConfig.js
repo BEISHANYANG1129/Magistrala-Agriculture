@@ -8,6 +8,7 @@ export const cardTypes = [
   'alarm_count',
   'alarm_table',
   'building_overview',
+  'camera_video',
 ]
 export function widgetType(widget) {
   const c = widget?.chart || {}
@@ -53,6 +54,7 @@ export function setWidgetType(widget, type) {
     c.dataSource.status ??= 'enabled'
   }
   if (type === 'building_overview') c.buildings ||= []
+  if (type === 'camera_video') { c.cameraDeviceId ||= ''; c.cameraView ||= 'all' }
   return widget
 }
 export function metadataValue(value) {
@@ -109,6 +111,12 @@ export function validateWidget(widget) {
     type = widgetType(widget)
   if (!c || !type) throw new Error('请选择组件类型 / Select a widget type')
   if (!widget.title?.trim()) throw new Error('请输入标题 / Enter a title')
+  if (type === 'camera_video') {
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(c.cameraDeviceId || ''))
+      throw new Error('请选择摄像头设备 / Select a camera device')
+    if (!['all', '0', '1', '2'].includes(c.cameraView || 'all'))
+      throw new Error('请选择支持的画面 / Select a supported view')
+  }
   if (
     type === 'alarm_count' &&
     ((c.color && !alarmColors.includes(c.color)) || (c.icon && !alarmIcons.includes(c.icon)))

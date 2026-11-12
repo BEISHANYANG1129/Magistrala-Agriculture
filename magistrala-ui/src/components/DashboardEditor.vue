@@ -57,6 +57,7 @@
       :columns="gridColumns[breakpoint]"
       :widgets="widgets"
       :editable="editing"
+      :weather="dashboard.metadata?.presentation === 'weather-observatory'"
       @update:cells="layouts[breakpoint] = $event"
       @width="viewportWidth = $event"
     >
@@ -71,7 +72,8 @@
       >
       <template #default="{ id }"
         ><DashboardWidget
-          :key="id + ':' + refreshRevision"
+          :key="id"
+          :refresh-token="refreshRevision"
           :widget="widgets.find((w) => w.id === id)"
           :workspace="workspace"
           :preview="!record.id"
@@ -251,6 +253,7 @@ const chartTypes = [
   ['bar_chart', '柱状图', 'Bar'],
   ['pie_chart', '饼图', 'Pie'],
   ['gauge_chart', '仪表', 'Gauge'],
+  ['compass_chart', '风向盘', 'Compass'],
   ['value_card', '数值卡', 'Value'],
   ['table_card', '资源表', 'Resource table'],
   ['count_card', '资源计数', 'Resource count'],
@@ -260,6 +263,7 @@ const chartTypes = [
   ['route_map', '轨迹图', 'Routes'],
   ['polygon_map', '区域图', 'Polygons'],
   ['building_overview', '建筑概览', 'Building overview'],
+  ['camera_video', '摄像头视频', 'Camera video'],
   ['switch_control', '开关控制', 'Switch control'],
   ['slider_control', '滑块控制', 'Slider control'],
 ]

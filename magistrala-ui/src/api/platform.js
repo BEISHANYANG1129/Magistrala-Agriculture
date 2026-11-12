@@ -19,11 +19,13 @@ export async function request(
     timeout = 25000,
     download = false,
     sessionRetry = false,
+    onRecord,
   } = {},
 ) {
   const controller = new AbortController()
   const abort = () => controller.abort()
   signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
   const timer = setTimeout(abort, timeout)
   try {
     if (auth && !headers.Authorization && localStorage.getItem('agri-remembered'))
@@ -45,6 +47,30 @@ export async function request(
       signal: controller.signal,
       cache: 'no-store',
     })
+    if (onRecord && response.ok) {
+      if (!response.headers.get('Content-Type')?.includes('application/x-ndjson') || !response.body)
+        throw new ApiError(tr('问答流不可用，请刷新服务状态。', 'Chat stream is unavailable.'))
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          buffer += decoder.decode(value, { stream: !done })
+          const lines = buffer.split('\n')
+          buffer = lines.pop()
+          for (const line of lines) if (line.trim()) onRecord(JSON.parse(line))
+          if (done) {
+            if (buffer.trim()) onRecord(JSON.parse(buffer))
+            break
+          }
+        }
+      } finally {
+        await reader.cancel().catch(() => {})
+        reader.releaseLock()
+      }
+      return
+    }
     if (download && response.ok) {
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
@@ -86,6 +112,7 @@ export async function request(
             timeout,
             download,
             sessionRetry: true,
+            onRecord,
           })
         // Only the session proxy can confirm a remembered session was revoked.
         // A single resource's 401 must not discard an otherwise valid login.

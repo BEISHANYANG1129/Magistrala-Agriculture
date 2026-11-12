@@ -1,5 +1,19 @@
 <template>
   <BuildingOverview v-if="type === 'building_overview'" :buildings="c.buildings" editable />
+  <fieldset v-else-if="type === 'camera_video'">
+    <legend>{{ tr('摄像头设备', 'Camera device') }}</legend>
+    <label class="field">{{ tr('设备', 'Device') }}<select v-model="c.cameraDeviceId" :aria-label="tr('设备', 'Device')" required>
+      <option value="">{{ tr('请选择摄像头', 'Select a camera') }}</option>
+      <option v-for="device in (devices || []).filter(cameraConfig)" :key="device.id" :value="device.id">{{ device.name }}</option>
+    </select></label>
+    <label class="field">{{ tr('显示画面', 'View') }}<select v-model="c.cameraView" :aria-label="tr('显示画面', 'View')">
+      <option value="all">{{ tr('全部画面', 'All views') }}</option>
+      <option value="0">{{ tr('画面 1', 'View 1') }}</option>
+      <option value="1">{{ tr('画面 2', 'View 2') }}</option>
+      <option value="2">{{ tr('画面 3', 'View 3') }}</option>
+    </select></label>
+    <p>{{ tr('视频引用所选设备，进入页面自动播放；停止与开启状态会保留。', 'This widget references the selected device, plays automatically, and remembers the stop/start setting.') }}</p>
+  </fieldset>
   <template v-else>
     <fieldset v-if="entityMap">
       <legend>{{ tr('地图资源', 'Map entities') }}</legend>
@@ -311,6 +325,7 @@
   </template>
 </template>
 <script setup>
+import { cameraConfig } from '../api/camera'
 import { computed, watch } from 'vue'
 import { tr } from '../i18n'
 import { widgetType, entitySection } from '../api/widgetConfig'

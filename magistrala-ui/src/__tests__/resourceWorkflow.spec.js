@@ -19,6 +19,18 @@ beforeEach(() => {
 })
 
 describe('resource workflows', () => {
+  it('creates a camera device binding without generating a telemetry authentication key', async () => {
+    runOperation.mockResolvedValue({ id: 'camera-created' })
+    const wrapper = mount(ResourceCreate, { props: { section: 'devices', workspace: 'w',
+      initial: { name: 'Camera', attributes: { metadata: { camera: { provider: 'jooan-tutk', bindingId: 'jooan-g4s4' } } } } } })
+    await flushPromises()
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(runOperation.mock.calls.map(([operation]) => operation)).toEqual(['createEntity'])
+    expect(runOperation.mock.calls[0][1].input.attributes.profile).toBe('camera')
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+    wrapper.unmount()
+  })
   it('queries device connections without the object filters rejected by Atom', async () => {
     gql.mockResolvedValue({
       directPolicies: {

@@ -57,6 +57,14 @@
           :workspace="workspace"
           :record="record"
         />
+        <CameraPlayer
+          v-else-if="tab === 'video' && cameraConfig(record)"
+          :key="record.id"
+          :workspace="workspace"
+          :device-id="record.id"
+          :title="record.name"
+          show-controls
+        />
         <MessagesPage v-else-if="tab === 'messages'" :channel-id="record.id" embedded />
         <ResourceTable
           v-else-if="section === 'groups' && ['devices', 'channels'].includes(tab)"
@@ -224,6 +232,8 @@ import ResourceCreate from './ResourceCreate.vue'
 import ResourceConnections from './ResourceConnections.vue'
 import ResourceAccess from './ResourceAccess.vue'
 import MessagesPage from './MessagesPage.vue'
+import CameraPlayer from './CameraPlayer.vue'
+import { cameraConfig } from '../api/camera'
 const route = useRoute(),
   router = useRouter(),
   workspace = computed(() => String(route.params.id)),
@@ -250,6 +260,8 @@ const tabs = computed(() => [
     en: section.value === 'devices' || section.value === 'gateways' ? 'Configuration' : 'Settings',
   },
   ...(section.value !== 'groups' ? [{ key: 'connections', zh: '连接', en: 'Connections' }] : []),
+  ...(section.value === 'devices' && cameraConfig(record.value)
+    ? [{ key: 'video', zh: '实时视频', en: 'Live video' }] : []),
   ...(['devices', 'gateways'].includes(section.value)
     ? [
         { key: 'groups', zh: '分组', en: 'Groups' },

@@ -3,7 +3,7 @@
     <div class="toolbar">
       <button class="quiet" @click="importing = true">{{ tr('上传 CSV', 'Upload CSV') }}</button
       ><button
-        @click="() => { 
+        @click="() => {
           copySource = null
           creating = true
          }"
@@ -116,7 +116,7 @@
                   <button @click="copyId(r)">{{ tr('复制 ID', 'Copy ID') }}</button>
                   <button
                     :disabled="r.managedBy === 'config'"
-                    @click="() => { 
+                    @click="() => {
                       quickEdit = r
                       quickName = r.name
                       quickError = ''
@@ -125,7 +125,7 @@
                     {{ tr('编辑名称', 'Edit Name') }}
                   </button>
                   <button
-                    @click="() => { 
+                    @click="() => {
                       copySource = r
                       creating = true
                      }"

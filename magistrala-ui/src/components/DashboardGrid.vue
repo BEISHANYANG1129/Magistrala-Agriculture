@@ -2,6 +2,7 @@
   <div
     ref="grid"
     class="dashboard-grid"
+    :class="{ 'weather-grid': weather, 'grid-editing': editable }"
     :style="{ height: height + 'px' }"
     @pointermove="move"
     @pointerup="end"
@@ -35,7 +36,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { tr } from '../i18n'
 import { moveGridCell } from '../api/dashboardLayout'
-const props = defineProps({ cells: Array, columns: Number, editable: Boolean, widgets: Array }),
+const props = defineProps({ cells: Array, columns: Number, editable: Boolean, widgets: Array, weather: Boolean }),
   emit = defineEmits(['update:cells', 'width'])
 const grid = ref(null),
   width = ref(900),
@@ -164,5 +165,19 @@ onBeforeUnmount(() => observer?.disconnect())
   touch-action: none;
   background: transparent;
   color: #527386;
+}
+.weather-grid { background-image: none; margin: 8px -8px; }
+.weather-grid.grid-editing { background-image: radial-gradient(#d7dfeb 1px, transparent 1px); }
+.weather-grid .dashboard-cell { padding: 8px; }
+.weather-grid .dashboard-cell::before {
+  content: ''; position: absolute; inset: 8px; background: #fff; border: 1px solid #e2ebe7;
+  border-radius: 16px; box-shadow: 0 3px 14px #27483a05; pointer-events: none;
+}
+.weather-grid .dashboard-cell > header {
+  position: relative; background: transparent; border: 0; padding: 18px 22px 8px;
+  min-height: 42px; color: #304a52; font-size: 13px; font-weight: 600;
+}
+.weather-grid .dashboard-cell-body {
+  position: relative; border: 0; background: transparent; padding: 4px 20px 16px; border-radius: 0 0 16px 16px;
 }
 </style>

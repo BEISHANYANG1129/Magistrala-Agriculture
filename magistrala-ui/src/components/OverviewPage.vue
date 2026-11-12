@@ -73,25 +73,12 @@ const shortcuts = [
 ]
 const apps = [
   {
-    path: 'field-map',
-    zh: '农田分区与位置',
-    en: 'Field areas & locations',
-    descZh: '查看农田底图、划分区域并标记设备位置。',
-    descEn: 'Organize field areas and place devices on your field map.',
-  },
-  {
     path: 'agent',
-    zh: '区域智能分析',
-    en: 'Regional intelligence',
-    descZh: '按区域读取传感器数据，查看分析依据与执行建议。',
-    descEn: 'Review sensor evidence and recommendations for each region.',
-  },
-  {
-    path: 'agri-integration',
-    zh: '农业数据集成',
-    en: 'Agriculture integration',
-    descZh: '查看农业服务连接、设备映射和数据采集情况。',
-    descEn: 'Review service connections, device mappings and data collection.',
+    zh: '智能工作台',
+    en: 'Intelligent workbench',
+    descZh: '问答检索、环境与图片分析、任务确认，共用可追溯的证据。',
+    descEn:
+      'Questions, environmental and image analysis, and confirmed tasks with traceable evidence.',
   },
 ]
 const cards = [

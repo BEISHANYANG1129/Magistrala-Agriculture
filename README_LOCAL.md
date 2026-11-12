@@ -8,9 +8,10 @@
 
 ```bash
 node scripts/run-local.mjs ui
+npm ci --prefix llm/agentv2/time-recognizer --ignore-scripts
 node scripts/run-local.mjs agent-ui
 ```
 
 Windows 兼容入口：`powershell -ExecutionPolicy Bypass -File .\run-local.ps1 ui`。
 
-前端地址 `http://127.0.0.1:5173`。不要同时运行占用相同端口的 Docker 农业容器和本机开发服务。可选的 image、control、llm、integration、executor 参数见主 README；第三方集成和真实执行器需要自己的凭据及 API 适配。
+前端地址 `http://127.0.0.1:5173`，新版智能工作台监听 `127.0.0.1:9026`，状态保存在 `llm/agentv2/runtime/intelligent-workbench/`。工作台默认模型为 `qwen3.5:9b`；无模型环境可先设置 `AGRI_WORKBENCH_PREVIEW=1`。不要同时运行占用相同端口的 Docker 农业容器和本机开发服务。可选的 image、control、llm、integration、executor 参数见主 README；第三方集成和真实执行器需要自己的凭据及 API 适配。

@@ -3,8 +3,7 @@ export const mobileNavigation = ref(window.matchMedia('(max-width: 1024px)').mat
 export const navigationCollapsed = ref(false)
 export const mobileNavigationOpen = ref(false)
 export function toggleNavigation() {
-  if (mobileNavigation.value)
-    mobileNavigationOpen.value = !mobileNavigationOpen.value
+  if (mobileNavigation.value) mobileNavigationOpen.value = !mobileNavigationOpen.value
   else navigationCollapsed.value = !navigationCollapsed.value
 }
 export const navigationGroups = [
@@ -19,6 +18,6 @@ export const navigationGroups = [
     en: 'Operations',
     keys: ['groups', 'channels', 'device-menu', 'messages', 'automation-menu', 'alarms', 'reports'],
   },
-  { zh: '农业应用', en: 'Agriculture', keys: ['field-map', 'agent', 'agri-integration'] },
+  { zh: '农业应用', en: 'Agriculture', keys: ['agent'] },
   { zh: '系统管理', en: 'Administration', keys: ['account', 'platform'] },
 ]

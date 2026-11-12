@@ -1,6 +1,8 @@
 # Magistrala Agriculture 智慧农业平台
 
-基于 Magistrala / Atom 的农业物联网管理平台，包含完整的 `magistrala/` 核心源码、Vue 农业管理界面、区域分析工作台、图片上传、农业控制服务，以及可选的第三方农业数据集成和设备执行服务。
+基于 Magistrala / Atom 的农业物联网管理平台，包含完整的 `magistrala/` 核心源码、Vue 农业管理界面、农业智能工作台、图片上传、农业控制服务，以及可选的第三方农业数据集成和设备执行服务。
+
+2026-11-12 更新：同步连续问答、环境与图片分析、自然语言自动化任务、摄像头页面和授权网关、农田地图与仪表盘改进。新版工作台使用本机 9026 端口。详见 [工作台说明](llm/agentv2/workbench/README.md)。
 
 本仓库直接包含两部分源码，不使用 Git 子模块。普通 `git clone` 即可取得项目。默认部署使用固定镜像摘要的 Magistrala 核心，并从本仓库构建农业界面和区域服务。
 
@@ -9,8 +11,10 @@
 - 中英文界面；账户登录、注册、工作区切换和服务端加密的记住登录会话。
 - 设备、通道、连接授权、分组、设备类型、成员、角色和权限管理。
 - 消息查询与 SenML 发送、数据图表、消息视图、规则、告警、报表和设备引导。
-- 农田地图、区域配置、设备绑定、传感器证据、分析建议及分析历史。
-- 区域工作台默认 `reader-demo`：读取真实 Reader 数据，使用模拟分析器，执行结果为模拟回执。默认部署不需要 Ollama 或 GPU，也不会自动控制真实阀门。
+- 农田地图、设备位置与分区、气象图表、图片消息和仪表盘刷新。
+- 智能工作台提供连续问答、带来源的统计与检索、环境和图片分析，以及人工确认后的模拟阀门任务和有界摄像头任务。
+- Docker 默认设置 `AGRI_WORKBENCH_PREVIEW=1`，保留查询和检索预览；模型分析需自行配置 Ollama、Python 和 GPU 检查。默认部署不下载模型，也不会自动控制真实阀门。
+- 摄像头页面及授权网关支持视频、快照和有界云台操作；连接实际摄像头仍需独立配置本机桥接服务、设备及工作区映射。桥接运行环境和设备凭据不随仓库分发。
 
 功能是否可用取决于账户权限、数据配置和后端版本。规则、仪表盘等功能可能受到上游版本配额限制。第三方农业平台、通知服务、真实设备执行和真实模型推理需要单独配置。
 
@@ -66,8 +70,8 @@ node scripts/deploy.mjs up
 1. 打开农业界面，登录后创建或选择自己的工作区。
 2. 创建设备和通道，为设备授予对应通道的发布／订阅权限。消息发送时使用你自己设备的密钥。
 3. 在“消息与视图”发送或查询数据。消息接收与持久化是不同环节，Reader 数据还需要正确的存储规则。农业界面不会自动创建生产存储规则。
-4. 在“农田地图”设置位置和分区，在“区域与 AI”创建区域、绑定当前工作区的传感器与通道、配置阈值。
-5. 有足够新鲜的传感器数据后发起分析。缺少数据或数据过期时，服务会拒绝分析。执行按钮返回模拟结果；不会驱动实际农业设备。
+4. 在平台的位置、分组和设备设置中维护地块与设备归属，在“智能工作台”查询本工作区数据或提交分析任务。
+5. 需要模型分析时，先配置自己的模型服务和资料。阀门流程目前仅支持模拟，具体草案需人工确认；真实摄像头任务还要求已核验的映射、桥接服务、操作权限及具体计划确认。
 
 新部署从空区域配置和空设备映射开始，不携带维护者的工作区、真实设备密钥、历史记录或登录状态。完整功能说明和历次验收边界见 [农业界面说明](docs/AGRI-UI-UPGRADE.md) 与 [区域服务说明](llm/agentv2/README.md)。历史验收记录中的本机路径和地址是当时的测试环境，不是新部署的配置要求。
 
@@ -77,7 +81,7 @@ node scripts/deploy.mjs up
 Magistrala-Agriculture/
 ├── magistrala/          # 完整 Magistrala 核心源码与 Docker 部署配置
 ├── magistrala-ui/       # Vue 3 / Vite 农业界面、API 契约、登录会话服务
-├── llm/agentv2/         # 区域分析工作台和 Go 服务
+├── llm/agentv2/         # 智能工作台、问答、任务编排和 Go 服务
 ├── llm/                 # 旧版 Ollama / RAG / 任务规划服务
 ├── agriControlService/  # 农业任务规划和控制 API
 ├── agriDataIntegration/ # 可选第三方农业数据集成服务
@@ -102,13 +106,14 @@ npm ci
 npm run dev
 ```
 
-在另一个终端，从仓库根目录启动区域服务（需要 Go 1.24.4+）：
+在另一个终端，从仓库根目录启动工作台服务（需要 Go 1.24.4+）：
 
 ```bash
+npm ci --prefix llm/agentv2/time-recognizer --ignore-scripts
 node scripts/run-local.mjs agent-ui
 ```
 
-开发前端默认连接本机 Atom / Reader 等服务。配置与生产容器中的内网地址不同；不要在已有完整 Docker 部署占用端口时重复启动相同服务。
+开发前端默认连接本机 Atom / Reader 等服务，工作台使用 `127.0.0.1:9026`。需要无模型预览时，启动前设置 `AGRI_WORKBENCH_PREVIEW=1`（PowerShell：`$env:AGRI_WORKBENCH_PREVIEW='1'`）。配置与生产容器中的内网地址不同；不要在已有完整 Docker 部署占用端口时重复启动相同服务。
 
 其他模块可独立运行，每个命令占用一个终端：
 
@@ -146,7 +151,9 @@ node scripts/serve.mjs
 
 这些本地文件已被 Git 忽略。旧第三方集成仍使用历史 REST API 和字段，需针对你部署的 Atom 版本及供应商接口自行适配；它们不属于默认容器栈已经验收的自动集成。历史 `liar` 示例使用 `MG_DEVICE_SECRET`、`MG_WORKSPACE_ID`、`MG_CHANNEL_ID` 环境变量。
 
-需要真实模型时，请按 [agentv2 README](llm/agentv2/README.md) 配置 Ollama 与模型。主机开发模式可设置 `AGRI_UI_MODEL=gemma3:12b` 再启动 `agent-ui`。当前 Docker 快速部署保持 `reader-demo`，没有 GPU 检查器或模型；修改真实模型部署需要额外配置 Python、GPU 检查和 Ollama 地址。旧版 LLM 模块还使用 `nomic-embed-text`。模型不会自动下载。
+新版工作台默认模型为 `qwen3.5:9b`，可用 `AGRI_WORKBENCH_MODEL` 和 `AGRI_OLLAMA_URL` 修改。主机开发模式需先安装该模型、Python 及可用的 GPU 检查工具；预览模式设置 `AGRI_WORKBENCH_PREVIEW=1`。Docker 快速部署默认启用预览，真实模型部署还需补齐这些运行依赖并设置 `AGRI_WORKBENCH_PREVIEW=0`。`AGRI_UI_MODEL` 仅影响保留的旧区域引擎；旧版 LLM 模块仍使用其独立配置及 `nomic-embed-text`。模型不会自动下载。
+
+新部署的照片和摄像头来源列表为空。可通过 `AGRI_WORKBENCH_PHOTOS`、`AGRI_WORKBENCH_CAMERAS` 指向自己的 JSON 来源登记文件，通过 `AGRI_WORKBENCH_DATA` 指向已核验的历史回放数据。来源文件必须使用当前部署自己的工作区与设备 ID。格式及能力边界见 [工作台说明](llm/agentv2/workbench/README.md)。
 
 ## 服务器部署与常见问题
 
@@ -160,8 +167,9 @@ node scripts/serve.mjs
 cd magistrala-ui
 npm run build
 npx vitest run
-node --test server/session-server.test.mjs
+node --test server/*.test.mjs
 cd ../llm/agentv2
+npm ci --prefix time-recognizer --ignore-scripts
 go test -p 1 ./...
 go vet ./...
 ```

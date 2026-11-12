@@ -1,9 +1,18 @@
 <template>
-  <div class="widget-content">
-    <p v-if="error" class="error">{{ error }}</p>
-    <p v-if="loading">{{ tr('正在加载…', 'Loading…') }}</p>
+  <div class="widget-content" :class="{ 'weather-widget': chart.presentation === 'weather' }" :style="{ '--metric-accent': chart.accent || '#208b77' }" :aria-busy="loading">
+    <p v-if="error" class="error widget-error" role="status">{{ error }}</p>
+    <p v-if="loading && !loaded" class="widget-loading">{{ tr('正在加载…', 'Loading…') }}</p>
+    <CameraPlayer
+      v-if="type === 'camera_video'"
+      :workspace="workspace"
+      :device-id="chart.cameraDeviceId"
+      :view="chart.cameraView || 'all'"
+      :title="widget.title"
+      :preview="preview"
+      compact
+    />
     <BuildingOverview
-      v-if="type === 'building_overview' && !chart.map?.image"
+      v-else-if="type === 'building_overview' && !chart.map?.image"
       :buildings="chart.buildings || []"
     />
     <div v-else-if="type.includes('control')">
@@ -74,13 +83,16 @@
       </div>
     </section>
     <section v-else-if="type === 'value_card'" class="value-card">
-      <p>{{ chart.label || chart.dataSource?.label || chart.dataSources?.[0]?.label }}</p>
+      <p v-if="chart.presentation !== 'weather'">{{ chart.label || chart.dataSource?.label || chart.dataSources?.[0]?.label }}</p>
       <p class="metric" :style="type === 'alarm_count' ? { color: chart.color } : {}">
-        {{ value }}
+        {{ chart.presentation === 'weather' && typeof value === 'number' ? value.toFixed(chart.decimals ?? 1) : value }}
         <small v-if="type !== 'alarm_count'">{{
           unitText(chart.dataSources?.[0]?.unit || rows[0]?.unit)
         }}</small>
       </p>
+      <div v-if="chart.presentation === 'weather'" class="metric-context">
+        <span>{{ chart.caption }}</span><span>{{ latestTime }}</span>
+      </div>
     </section>
     <div v-else-if="type.includes('table')" class="table-wrap">
       <table>
@@ -124,7 +136,10 @@
       :shapes="shapes"
     />
     <div v-else ref="canvas" class="chart-canvas"></div>
-    <button class="quiet" :disabled="loading" @click="load">
+    <div v-if="chart.presentation === 'weather' && type !== 'value_card'" class="weather-footnote">
+      <span>{{ chart.caption }}</span><span>{{ rows.length ? '最近 ' + latestTime : '暂无近期数据' }}</span>
+    </div>
+    <button v-if="type !== 'camera_video' && (chart.presentation !== 'weather' || preview)" class="quiet" :disabled="loading" @click="load">
       {{ tr('刷新组件', 'Refresh widget') }}
     </button>
   </div>
@@ -136,12 +151,13 @@ import { tr, label } from '../i18n'
 import NavIcon from './NavIcon.vue'
 import TelemetryMap from './TelemetryMap.vue'
 import BuildingOverview from './BuildingOverview.vue'
+import CameraPlayer from './CameraPlayer.vue'
 import { widgetType, entitySection } from '../api/widgetConfig'
-import { chartOptions, unitText } from '../api/chartPresentation'
+import { chartOptions, unitText, messageTime } from '../api/chartPresentation'
 import { alarmCause, completeAlarmColumns } from '../api/alarmPresentation'
 import { loadWidgetData } from '../api/widgetData'
 import { readResource } from '../api/resourceWorkflow'
-const props = defineProps({ widget: Object, workspace: String, preview: Boolean }),
+const props = defineProps({ widget: Object, workspace: String, preview: Boolean, refreshToken: Number }),
   chart = computed(() => props.widget.chart || {}),
   type = computed(() => widgetType(props.widget)),
   shapes = ref([]),
@@ -149,10 +165,13 @@ const props = defineProps({ widget: Object, workspace: String, preview: Boolean 
   rows = ref([]),
   value = ref('—'),
   loading = ref(false),
+  loaded = ref(false),
   error = ref(''),
   key = ref(''),
   controlValue = ref(0),
   switchValue = ref(false)
+const latestTime = computed(() => rows.value.length
+  ? new Date(messageTime(rows.value[0].time)).toLocaleTimeString('zh-CN', { hour12: false }) : '等待上报')
 const resourceLabel = computed(() =>
   entitySection(chart.value.dataSource?.entity) === 'channels'
     ? tr('通道', 'Channels')
@@ -174,11 +193,13 @@ const tableColumns = computed(() =>
 let refreshTimer,
   instance,
   observer,
+  chartElement,
+  painted = false,
   seq = 0
 async function load() {
+  if (type.value === 'camera_video') { loaded.value = true; loading.value = false; error.value = ''; return }
   const current = ++seq
   loading.value = true
-  error.value = ''
   try {
     const result = await loadWidgetData(props.widget, props.workspace, {
       request,
@@ -190,31 +211,54 @@ async function load() {
     shapes.value = result.shapes
     value.value = result.value ?? '—'
     await nextTick()
-    await draw()
+    await draw(current)
+    if (current === seq) {
+      loaded.value = true
+      error.value = ''
+    }
   } catch (e) {
     if (current === seq) error.value = errorText(e)
   } finally {
     if (current === seq) loading.value = false
   }
 }
-async function draw() {
-  if (!canvas.value) return
-  const echarts = await import('echarts')
-  if (!canvas.value) return
-  instance?.dispose()
-  instance = echarts.init(canvas.value)
-  const options = () =>
-    chartOptions(props.widget, rows.value, {
-      width: canvas.value?.clientWidth,
-      height: canvas.value?.clientHeight,
-    })
-  instance.setOption(options())
+function releaseChart() {
   observer?.disconnect()
-  observer = new ResizeObserver(() => {
-    instance?.resize()
-    if (type.value === 'gauge_chart') instance?.setOption(options())
+  instance?.dispose()
+  observer = undefined
+  instance = undefined
+  chartElement = undefined
+  painted = false
+}
+function updateChart() {
+  if (!instance || !chartElement) return
+  const options = chartOptions(props.widget, rows.value, {
+    width: chartElement.clientWidth,
+    height: chartElement.clientHeight,
   })
-  observer.observe(canvas.value)
+  // Keep the canvas alive; replacing options also clears series when data is empty.
+  instance.setOption({ ...options, animation: !painted, animationDurationUpdate: 0 }, { notMerge: true })
+  painted = true
+}
+async function draw(current) {
+  if (current !== seq) return
+  if (!canvas.value) {
+    releaseChart()
+    return
+  }
+  const echarts = await import('echarts')
+  if (current !== seq || !canvas.value) return
+  if (chartElement !== canvas.value) {
+    releaseChart()
+    chartElement = canvas.value
+    instance = echarts.init(chartElement)
+    observer = new ResizeObserver(() => {
+      instance?.resize()
+      if (type.value === 'gauge_chart') updateChart()
+    })
+    observer.observe(chartElement)
+  }
+  updateChart()
 }
 async function send() {
   if (props.preview) return
@@ -273,8 +317,6 @@ watch(
         controlValue.value,
       ),
     )
-    instance?.dispose()
-    observer?.disconnect()
     load()
     const seconds = Number(chart.value.dataRefreshInterval)
     if (seconds > 0 && !type.value.includes('control') && type.value !== 'building_overview')
@@ -287,20 +329,32 @@ watch(
   },
   { deep: true, immediate: true },
 )
+watch(() => props.refreshToken, () => load())
 onBeforeUnmount(() => {
   clearInterval(refreshTimer)
   seq++
-  instance?.dispose()
-  observer?.disconnect()
+  releaseChart()
 })
 </script>
 <style scoped>
 .widget-content {
+  position: relative;
   min-height: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.widget-loading, .widget-error {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, .95);
+  pointer-events: none;
 }
 .widget-content > button {
   align-self: flex-start;
@@ -363,4 +417,11 @@ onBeforeUnmount(() => {
   flex-direction: column;
   justify-content: center;
 }
+.weather-widget { gap: 4px; min-height: 0; }
+.weather-widget .value-card { justify-content: space-between; gap: 10px; }
+.weather-widget .metric { font-size: clamp(30px, 3vw, 42px); font-weight: 600; line-height: 1.2; margin: 3px 0 8px; color: var(--metric-accent); letter-spacing: -1.5px; font-variant-numeric: tabular-nums; }
+.weather-widget .metric small { font-size: 14px; margin-left: 7px; color: #8a999f; font-weight: 400; letter-spacing: 0; }
+.metric-context, .weather-footnote { display: flex; justify-content: space-between; gap: 10px; color: #8b999f; font-size: 10px; line-height: 1.6; }
+.weather-footnote { flex-shrink: 0; }
+.weather-widget .chart-canvas { min-height: 120px; }
 </style>

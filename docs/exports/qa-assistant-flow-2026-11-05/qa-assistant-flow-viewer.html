@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>问答助手运行流程 · 可缩放查看</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;font-family:"Microsoft YaHei",system-ui,sans-serif;color:#20354b;background:#edf1f5}
+header{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:14px 20px;background:#fff;border-bottom:1px solid #d8e0e8}
+h1{font-size:17px;margin:0 20px 0 0;font-weight:600}button,a{font:inherit;font-size:14px;border:1px solid #c8d4df;background:#fff;border-radius:6px;color:#20354b;padding:7px 12px;text-decoration:none;cursor:pointer}button:hover,a:hover{background:#f0f5fa}button:focus-visible,a:focus-visible{outline:2px solid #2166a3;outline-offset:2px}
+#zoom-label{min-width:54px;text-align:center;font-variant-numeric:tabular-nums}.hint{font-size:13px;color:#587087;margin-left:auto}#viewport{position:relative;overflow:hidden;touch-action:none;cursor:grab;flex:1;min-height:0;background-image:radial-gradient(#d4dee8 1px,transparent 1px);background-size:20px 20px}#viewport.dragging{cursor:grabbing}body{display:flex;flex-direction:column}#diagram{position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;pointer-events:none;box-shadow:0 3px 18px #20354b18;background:#fff}
+@media(max-width:700px){header{gap:8px;padding:10px}h1{width:100%;margin:0}.hint{width:100%;margin:0}button,a{padding:8px 10px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>问答助手运行流程</h1>
+  <button id="zoom-out" aria-label="缩小">−</button><output id="zoom-label" aria-live="polite">100%</output><button id="zoom-in" aria-label="放大">＋</button>
+  <button id="fit-width">适应宽度</button><button id="fit-all">查看全图</button><button id="actual-size">100%</button>
+  <a href="qa-assistant-flow.svg" download>保存 SVG</a>
+  <span class="hint">滚轮缩放 · 按住拖动 · 双击适应宽度</span>
+</header>
+<main id="viewport" aria-label="可缩放和拖动的流程图" tabindex="0">
+  <img id="diagram" src="qa-assistant-flow.svg" alt="问答助手运行流程：认证与共享锁、时间解析、查询规划、平台读取、RAG、回答复核与会话保存" draggable="false">
+</main>
+<script>
+const viewport=document.getElementById('viewport'),diagram=document.getElementById('diagram'),label=document.getElementById('zoom-label');
+let scale=1,x=0,y=0,width=0,height=0,drag=null;
+function draw(){diagram.style.transform=`translate(${x}px,${y}px) scale(${scale})`;label.value=`${Math.round(scale*100)}%`;label.textContent=label.value}
+function zoom(next,anchorX=viewport.clientWidth/2,anchorY=viewport.clientHeight/2){next=Math.max(.05,Math.min(5,next));const ratio=next/scale;x=anchorX-(anchorX-x)*ratio;y=anchorY-(anchorY-y)*ratio;scale=next;draw()}
+function fitWidth(){if(!width)return;scale=Math.max(.05,Math.min(2,(viewport.clientWidth-40)/width));x=(viewport.clientWidth-width*scale)/2;y=20;draw()}
+function fitAll(){if(!width)return;scale=Math.max(.05,Math.min((viewport.clientWidth-40)/width,(viewport.clientHeight-40)/height));x=(viewport.clientWidth-width*scale)/2;y=(viewport.clientHeight-height*scale)/2;draw()}
+diagram.addEventListener('load',()=>{width=diagram.naturalWidth;height=diagram.naturalHeight;diagram.style.width=`${width}px`;diagram.style.height=`${height}px`;fitWidth()});
+document.getElementById('zoom-in').onclick=()=>zoom(scale*1.25);document.getElementById('zoom-out').onclick=()=>zoom(scale/1.25);document.getElementById('fit-width').onclick=fitWidth;document.getElementById('fit-all').onclick=fitAll;document.getElementById('actual-size').onclick=()=>zoom(1);
+viewport.addEventListener('wheel',event=>{event.preventDefault();const bounds=viewport.getBoundingClientRect();zoom(scale*Math.exp(-event.deltaY*.0015),event.clientX-bounds.left,event.clientY-bounds.top)},{passive:false});
+viewport.addEventListener('pointerdown',event=>{if(event.button!==0)return;drag={id:event.pointerId,startX:event.clientX,startY:event.clientY,x,y};viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging')});
+viewport.addEventListener('pointermove',event=>{if(!drag||drag.id!==event.pointerId)return;x=drag.x+event.clientX-drag.startX;y=drag.y+event.clientY-drag.startY;draw()});
+function endDrag(event){if(drag&&drag.id===event.pointerId){drag=null;viewport.classList.remove('dragging')}}
+viewport.addEventListener('pointerup',endDrag);viewport.addEventListener('pointercancel',endDrag);viewport.addEventListener('dblclick',fitWidth);
+viewport.addEventListener('keydown',event=>{if(event.key==='+'||event.key==='=')zoom(scale*1.25);else if(event.key==='-')zoom(scale/1.25);else if(event.key==='0')fitAll();else if(event.key==='ArrowDown')y-=80;else if(event.key==='ArrowUp')y+=80;else if(event.key==='ArrowLeft')x+=80;else if(event.key==='ArrowRight')x-=80;else return;event.preventDefault();draw()});
+</script>
+</body>
+</html>

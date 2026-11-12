@@ -26,7 +26,7 @@
     </div>
     <label v-if="!embedded" class="field"
       >{{ tr('选择通道', 'Select channel')
-      }}<select v-model="channel" @change="load">
+      }}<select v-model="channel" @change="selectChannel">
         <option value="">{{ tr('请选择', 'Select') }}</option>
         <option v-for="c in channels" :key="c.id" :value="c.id">{{ c.name }}</option>
       </select></label
@@ -44,7 +44,7 @@
       <div class="form-grid">
         <label class="field"
           >{{ tr('通道', 'Channel')
-          }}<select v-model="channel" required :disabled="embedded">
+          }}<select v-model="channel" required :disabled="embedded" @change="selectChannel">
             <option value="">{{ tr('选择通道', 'Choose a channel') }}</option>
             <option v-for="c in channels" :key="c.id" :value="c.id">{{ c.name || c.id }}</option>
           </select></label
@@ -99,6 +99,8 @@
     <div class="tabs">
       <button class="quiet" :class="{ active: tab === 'table' }" @click="tab = 'table'">
         {{ tr('表格', 'Table') }}</button
+      ><button class="quiet" :class="{ active: tab === 'images' }" @click="tab = 'images'">
+        {{ tr('图片', 'Images') }} ({{ imageRows.length }})</button
       ><button class="quiet" :class="{ active: tab === 'chart' }" @click="tab = 'chart'">
         {{ tr('趋势', 'Trend') }}</button
       ><button class="quiet" :class="{ active: tab === 'raw' }" @click="tab = 'raw'">
@@ -116,7 +118,15 @@
         {{ tr('保存的消息视图', 'Saved message views') }}
       </button>
     </div>
-    <div v-if="tab === 'chart'" class="panel">
+    <div v-if="tab === 'images'" class="message-image-grid">
+      <article v-for="{ row, image } in imageRows" :key="`${row.publisher}-${row.name}-${row.time}`" class="panel">
+        <h3>{{ cell(row, 'publisher') }}</h3>
+        <p>{{ formatTime(row.time) }} · {{ row.name }}</p>
+        <MessageImage :image="image" :label="`${row.name} ${formatTime(row.time)}`" />
+      </article>
+      <p v-if="!imageRows.length" class="panel">{{ tr('当前页没有可预览的 JPEG / PNG 图片消息。可按设备筛选，或翻页查看历史记录。', 'No JPEG / PNG image messages on this page. Filter by device or browse history.') }}</p>
+    </div>
+    <div v-else-if="tab === 'chart'" class="panel">
       <svg
         viewBox="0 0 800 220"
         role="img"
@@ -148,7 +158,10 @@
         </thead>
         <tbody>
           <tr v-for="(row, index) in displayRows" :key="index">
-            <td v-for="c in visibleColumns" :key="c.key">{{ cell(row, c.key) }}</td>
+            <td v-for="c in visibleColumns" :key="c.key">
+              <MessageImage v-if="['value', 'data_value', 'vd'].includes(c.key) && imageByRow.get(row)" :image="imageByRow.get(row)" :label="`${row.name} ${formatTime(row.time)}`" />
+              <template v-else>{{ cell(row, c.key) }}</template>
+            </td>
           </tr>
           <tr v-if="!displayRows.length">
             <td :colspan="visibleColumns.length">
@@ -277,6 +290,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { tr, language } from '../i18n'
 import { runOperation, request, errorText } from '../api/platform'
 import MessageViewEditor from './MessageViewEditor.vue'
+import MessageImage from './MessageImage.vue'
+import { messageImage } from '../api/messageImages'
 import { viewSettings, viewCell, readerViewParams } from '../api/messageViews'
 import { deviceKey } from '../api/resourceWorkflow'
 const props = defineProps({ channelId: String, embedded: Boolean })
@@ -301,7 +316,7 @@ const route = useRoute(),
   busy = ref(false),
   error = ref(''),
   notice = ref(''),
-  tab = ref('table'),
+  tab = ref(route.query.display === 'images' ? 'images' : 'table'),
   views = ref([]),
   viewsOpen = ref(false),
   activeView = ref(null),
@@ -314,7 +329,8 @@ const sendDevice = ref(''),
 watch(sendType, (type) => {
   sendValue.value = type === 'boolean' ? false : type === 'number' ? 0 : ''
 })
-let sequence = 0
+let sequence = 0, catalogSequence = 0, viewsSequence = 0
+const catalogReady = ref(false)
 const payload = computed(() => [
   {
     n: sendMetric.value,
@@ -415,20 +431,30 @@ async function load() {
 }
 async function loadViews() {
   if (!channel.value) return
+  const context = workspace.value + '/channels/' + channel.value
+  const revision = ++viewsSequence
   try {
-    const context = workspace.value + '/channels/' + channel.value
     const d = await request(`/api/platform/ui/${context}/message-views`)
-    if (context !== workspace.value + '/channels/' + channel.value) return
+    if (revision !== viewsSequence || context !== workspace.value + '/channels/' + channel.value) return
     views.value = (d.message_views || []).sort((a, b) => (a.position || 0) - (b.position || 0))
     selectedView.value =
       views.value.find((v) => v.id === (route.query.view || selectedView.value?.id)) || null
+    await load()
   } catch (e) {
-    error.value = errorText(e)
+    if (revision === viewsSequence && context === workspace.value + '/channels/' + channel.value)
+      error.value = errorText(e)
   }
 }
-function selectView(v) {
-  selectedView.value = v
+function selectChannel() {
   const query = { ...route.query }
+  if (channel.value) query.channel = channel.value
+  else delete query.channel
+  delete query.view
+  router.replace({ query })
+}
+function selectView(v) {
+  const query = { ...route.query }
+  if (!props.embedded && channel.value) query.channel = channel.value
   if (v) query.view = v.id
   else delete query.view
   router.replace({ query })
@@ -438,6 +464,11 @@ function openView(method, row = { position: views.value.length }) {
 }
 const currentView = computed(() => (selectedView.value ? viewSettings(selectedView.value) : null))
 const displayRows = computed(() => rows.value)
+const imageByRow = computed(() => new Map(rows.value.map((row) => [row, messageImage(row)])))
+const imageRows = computed(() => rows.value.flatMap((row) => {
+  const image = imageByRow.value.get(row)
+  return image ? [{ row, image }] : []
+}))
 const visibleColumns = computed(
   () =>
     currentView.value?.columns.filter((c) => c.enabled) || [
@@ -504,10 +535,13 @@ async function publish() {
   }
 }
 watch(
-  () => [route.params.id, props.channelId],
+  [() => route.params.id, () => props.channelId],
   async () => {
-    const seq = ++sequence
+    const seq = ++catalogSequence
+    catalogReady.value = false
+    channel.value = ''
     rows.value = []
+    total.value = 0
     error.value = ''
     sendKey.value = ''
     try {
@@ -515,26 +549,23 @@ watch(
         runOperation('resources', { tenantId: workspace.value, kind: 'channel', limit: 100 }),
         runOperation('entities', { tenantId: workspace.value, kind: 'device', limit: 100 }),
       ])
-      if (seq !== sequence) return
+      if (seq !== catalogSequence) return
       channels.value = c.items
       devices.value = d.items
+      catalogReady.value = true
       channel.value = String(props.channelId || route.query.channel || '')
-      if (channel.value) {
-        await loadViews()
-        await load()
-      }
     } catch (e) {
-      if (seq === sequence) error.value = errorText(e)
+      if (seq === catalogSequence) error.value = errorText(e)
     }
   },
   { immediate: true },
 )
-watch(selectedView, () => {
-  offset.value = 0
-  if (channel.value) load()
-})
 watch(channel, () => {
+  sequence++
+  viewsSequence++
   rows.value = []
+  total.value = 0
+  busy.value = false
   views.value = []
   activeView.value = null
   selectedView.value = null
@@ -542,12 +573,27 @@ watch(channel, () => {
   loadViews()
 })
 watch(
+  () => route.query.channel,
+  (id) => {
+    if (!props.embedded && catalogReady.value) channel.value = String(id || '')
+  },
+)
+watch(
   () => route.query.view,
   (id) => {
     const next = views.value.find((v) => v.id === id) || null
-    if (selectedView.value?.id !== next?.id) selectedView.value = next
+    if (selectedView.value?.id !== next?.id) {
+      selectedView.value = next
+      offset.value = 0
+      if (channel.value) load()
+    }
   },
 )
 function changePage(page) { const next = (page - 1) * limit.value; if (next !== offset.value) { offset.value = next; load() } }
 function changeSize(size) { limit.value = size; offset.value = 0; load() }
 </script>
+<style scoped>
+.message-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+.message-image-grid h3 { margin-top: 0; }
+.message-image-grid p { overflow-wrap: anywhere; }
+</style>

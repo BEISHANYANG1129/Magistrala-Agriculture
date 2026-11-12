@@ -57,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File .\run-local.ps1 agent-ui
 
 区域服务默认 `reader-demo`：读取真实 Reader，使用模拟分析器，不使用 GPU。界面会显示当前模式。需要真实模型时，在启动区域服务的终端设置 `$env:AGRI_UI_MODEL = 'gemma3:12b'`，再启动 `agent-ui`。只停止自己启动的区域服务，不停止共享 Ollama 或其他任务。真实模式每次专家调用前运行显卡检查，忙碌或无法确认空闲时拒绝本次调用，待资源空闲后重试；不是后台自动排队。
 
-如果更改区域服务地址，需要在启动 Vite 前设置 `AGRI_AGENT_URL`。前端代理保留 Host/Origin 校验所需信息。当前代理配置用于本机开发；生产部署仍需单独配置反向代理和 HTTPS。
+如果更改区域服务地址，需要在启动 Vite 前设置 `AGRI_AGENT_URL`。前端代理将 Host 和经过前端同源校验的 Origin 转换为工作台服务地址，支持通过本机或局域网 IP 访问前端；外部来源仍由后端拒绝。工作台服务继续仅监听本机，登录令牌和工作区权限校验保持生效。生产部署仍需单独配置反向代理和 HTTPS。
 
 ## 区域权限和数据存放
 

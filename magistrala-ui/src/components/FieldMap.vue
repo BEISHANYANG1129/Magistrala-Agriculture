@@ -7,32 +7,61 @@
         <p>
           {{
             tr(
-              '保留原项目的通道底图、分区和设备位置。绘图区分用于展示；分析归属在区域工作台中配置。',
-              'Uses the original channel background, partitions and device positions. Configure analysis ownership separately in the regional workbench.',
+              '每个分组一张底图，显示本组设备；分区和设备位置分别随这张图保存。',
+              'Each group has its own map, areas and device positions. Only devices in this group are shown.',
             )
           }}
         </p>
       </div>
     </header>
     <div class="toolbar">
-      <select v-model="channel" @change="load">
-        <option value="">{{ tr('选择通道', 'Choose channel') }}</option>
-        <option v-for="c in channels" :key="c.id" :value="c.id">{{ c.name }}</option></select
-      ><button class="quiet" :disabled="!channel || busy" @click="load">
+      <select
+        :value="groupId"
+        :disabled="busy"
+        :aria-label="tr('选择分组', 'Choose group')"
+        @change="selectGroup"
+      >
+        <option value="">{{ tr('选择分组', 'Choose group') }}</option>
+        <option v-for="g in groups" :key="g.id" :value="g.id">{{ g.name }}</option></select
+      ><button class="quiet" :disabled="!groupId || busy" @click="requestLoad(groupId)">
         {{ tr('刷新', 'Refresh') }}</button
-      ><button :disabled="!channel || busy" @click="saveMap">
+      ><button :disabled="!original || busy || points.length > 0" @click="saveMap">
         {{ tr('保存底图与分区', 'Save background & areas') }}
       </button>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="notice" class="success">{{ notice }}</p>
-    <div v-if="channel" class="panel">
+    <p v-if="busy" role="status">{{ tr('处理中…', 'Working…') }}</p>
+    <p v-if="!groupId" class="notice">
+      {{ tr('请选择分组，查看或设置它的地图。', 'Choose a group to view or configure its map.') }}
+    </p>
+    <p v-if="dirty" class="notice">
+      {{
+        tr(
+          '底图或分区尚未保存；绘制中的区域请先完成或取消。',
+          'Background or areas are unsaved. Finish or cancel the area being drawn.',
+        )
+      }}
+    </p>
+    <fieldset v-if="original" class="panel map-editor" :disabled="busy">
+      <p>
+        {{ tr('本组设备', 'Group devices') }}：{{ devices.length }} ·
+        {{ tr('已定位', 'Positioned') }}：{{ positioned.length }}
+      </p>
+      <p v-if="!devices.length" class="notice">
+        {{
+          tr(
+            '此分组尚未关联设备。可先设置底图和分区；设备关联请在分组的设备页管理。',
+            'No devices are associated with this group. You can configure the map; manage associations on the group Devices page.',
+          )
+        }}
+      </p>
       <label class="field"
         >{{ tr('底图地址', 'Background image URL')
         }}<input v-model="background" type="url" placeholder="http://..."
       /></label>
       <div class="toolbar">
-        <select v-model="mode">
+        <select v-model="mode" :aria-label="tr('操作模式', 'Map mode')">
           <option value="view">{{ tr('浏览', 'View') }}</option>
           <option value="area">{{ tr('绘制多边形区域', 'Draw polygon area') }}</option>
           <option value="device">{{ tr('定位设备', 'Place device') }}</option></select
@@ -40,13 +69,25 @@
           v-if="mode === 'area'"
           v-model="areaName"
           :placeholder="tr('区域名称', 'Area name')"
-        /><select v-if="mode === 'device'" v-model="device">
+        /><select
+          v-if="mode === 'device'"
+          v-model="device"
+          :aria-label="tr('选择设备', 'Choose device')"
+        >
           <option value="">{{ tr('选择设备', 'Choose device') }}</option>
           <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }}</option></select
         ><button v-if="mode === 'area'" class="quiet" :disabled="points.length < 3" @click="finish">
           {{ tr('完成区域', 'Finish area') }}</button
         ><button class="quiet" @click="points = []">{{ tr('取消绘制', 'Cancel drawing') }}</button>
       </div>
+      <p v-if="mode === 'device'" class="notice">
+        {{
+          tr(
+            '选中设备后点击图面，位置立即保存到当前分组地图。',
+            'Choose a device and click the map to save its position on this group map immediately.',
+          )
+        }}
+      </p>
       <svg
         class="map-canvas"
         viewBox="0 0 1000 650"
@@ -99,7 +140,7 @@
         </g>
       </svg>
       <div v-for="a in areas" :key="a.id" class="toolbar">
-        <input v-model="a.name" /><input
+        <input v-model="a.name" :aria-label="tr('分区名称', 'Area name')" /><input
           type="color"
           v-model="a.color"
           style="width: 70px"
@@ -107,17 +148,36 @@
           {{ tr('移除分区', 'Remove area') }}
         </button>
       </div>
-    </div>
+    </fieldset>
+    <ModalDialog v-if="pendingGroup !== null" confirmation @close="pendingGroup = null">
+      <section class="modal-card compact-modal">
+        <h2>{{ tr('放弃未保存的地图修改？', 'Discard unsaved map changes?') }}</h2>
+        <p>
+          {{
+            tr(
+              '底图和分区草稿将被放弃，已保存的设备位置不受影响。',
+              'Background and area drafts will be discarded. Saved device positions are kept.',
+            )
+          }}
+        </p>
+        <button class="quiet" @click="pendingGroup = null">
+          {{ tr('继续编辑', 'Keep editing') }}
+        </button>
+        <button @click="confirmLoad">{{ tr('放弃并继续', 'Discard and continue') }}</button>
+      </section>
+    </ModalDialog>
   </section>
 </template>
 <script setup>
-import { ref, computed, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { runOperation, listAll, errorText } from '../api/platform'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { useRoute, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import { listAll, errorText } from '../api/platform'
+import { groupMap, loadGroupMap, saveGroupMap, validPosition, sameMapValue } from '../api/fieldMap'
+import ModalDialog from './ModalDialog.vue'
 import { tr } from '../i18n'
 const route = useRoute(),
-  channel = ref(''),
-  channels = ref([]),
+  groupId = ref(''),
+  groups = ref([]),
   devices = ref([]),
   background = ref(''),
   areas = ref([]),
@@ -127,34 +187,97 @@ const route = useRoute(),
   areaName = ref(''),
   busy = ref(false),
   error = ref(''),
-  notice = ref('')
-let original
+  notice = ref(''),
+  original = ref(null),
+  positions = ref({}),
+  pendingGroup = ref(null)
+let generation = 0,
+  workspaceGeneration = 0
+const dirty = computed(
+  () =>
+    original.value &&
+    (points.value.length > 0 ||
+      background.value !== groupMap(original.value).background ||
+      !sameMapValue(areas.value, groupMap(original.value).partitions)),
+)
+function leave() {
+  if (busy.value) return false
+  return (
+    !dirty.value ||
+    window.confirm(
+      tr('底图和分区尚未保存，放弃修改并离开？', 'Discard unsaved map changes and leave?'),
+    )
+  )
+}
+onBeforeRouteLeave(leave)
+onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || leave())
+function beforeUnload(event) {
+  if (dirty.value || busy.value) {
+    event.preventDefault()
+    event.returnValue = ''
+  }
+}
+window.addEventListener('beforeunload', beforeUnload)
+onBeforeUnmount(() => {
+  generation++
+  workspaceGeneration++
+  window.removeEventListener('beforeunload', beforeUnload)
+})
 const safeBackground = computed(() =>
   /^https?:\/\//i.test(background.value) ? background.value : '',
 )
 function position(d) {
-  return (d.attributes?.metadata || d.attributes || {}).position || {}
+  return positions.value[d.id] || {}
 }
-const positioned = computed(() =>
-  devices.value.filter((d) => Number.isFinite(position(d).x) && Number.isFinite(position(d).y)),
-)
+const positioned = computed(() => devices.value.filter((d) => validPosition(position(d))))
 function polygon(p) {
   return (p || []).map((v) => `${v.x * 1000},${v.y * 650}`).join(' ')
 }
-async function load() {
-  if (!channel.value) return
-  busy.value = true
+function selectGroup(event) {
+  const next = event.target.value
+  event.target.value = groupId.value
+  requestLoad(next)
+}
+function requestLoad(next) {
+  if (busy.value) return
+  if (dirty.value) pendingGroup.value = next
+  else load(next)
+}
+function confirmLoad() {
+  const next = pendingGroup.value
+  pendingGroup.value = null
+  load(next)
+}
+async function load(next) {
+  const seq = ++generation
+  const workspace = String(route.params.id)
+  groupId.value = next
+  original.value = null
+  devices.value = []
+  positions.value = {}
+  background.value = ''
+  areas.value = []
+  points.value = []
+  device.value = ''
+  mode.value = 'view'
+  areaName.value = ''
+  notice.value = ''
   error.value = ''
+  if (!next) return
+  busy.value = true
   try {
-    original = await runOperation('resource', { id: channel.value })
-    const m = original.attributes?.metadata || original.attributes || {}
-    background.value = m.background || ''
-    areas.value = JSON.parse(JSON.stringify(m.partitions || []))
-    points.value = []
+    const result = await loadGroupMap(next, workspace)
+    if (seq !== generation) return
+    original.value = result.record
+    devices.value = result.devices
+    const map = groupMap(result.record)
+    background.value = map.background
+    areas.value = map.partitions
+    positions.value = map.positions
   } catch (e) {
-    error.value = errorText(e)
+    if (seq === generation) error.value = errorText(e)
   } finally {
-    busy.value = false
+    if (seq === generation) busy.value = false
   }
 }
 function finish() {
@@ -169,6 +292,7 @@ function finish() {
   areaName.value = ''
 }
 async function pick(event) {
+  if (busy.value || !original.value || mode.value === 'view') return
   const svg = event.currentTarget
   const pt = svg.createSVGPoint()
   pt.x = event.clientX
@@ -182,66 +306,73 @@ async function pick(event) {
   if (mode.value !== 'device' || !device.value || busy.value) return
   busy.value = true
   error.value = ''
+  notice.value = ''
+  const seq = generation
   try {
-    const d = await runOperation('entity', { id: device.value })
-    if (d.tenantId !== String(route.params.id))
-      throw new Error(tr('设备不属于当前工作区。', 'Device is outside this workspace.'))
-    const attrs = { ...d.attributes }
-    if (attrs.metadata) attrs.metadata = { ...attrs.metadata, position: point }
-    else attrs.position = point
-    const saved = await runOperation('updateEntity', { id: d.id, input: { attributes: attrs } })
-    devices.value = devices.value.map((x) => (x.id === d.id ? saved : x))
-    notice.value = tr('设备位置已保存。', 'Device location saved.')
+    const saved = await saveGroupMap(
+      original.value,
+      String(route.params.id),
+      { position: point },
+      device.value,
+    )
+    if (seq !== generation) return
+    original.value = saved
+    positions.value = groupMap(saved).positions
+    notice.value = tr('设备位置已保存到当前分组地图。', 'Device position saved to this group map.')
   } catch (e) {
-    error.value = errorText(e)
+    if (seq === generation) error.value = errorText(e)
   } finally {
-    busy.value = false
+    if (seq === generation) busy.value = false
   }
 }
 async function saveMap() {
+  if (!original.value || busy.value || points.value.length) return
   busy.value = true
   error.value = ''
+  notice.value = ''
+  const seq = generation
   try {
-    const latest = await runOperation('resource', { id: channel.value })
-    if (JSON.stringify(latest.attributes) !== JSON.stringify(original.attributes))
-      throw new Error(
-        tr(
-          '通道配置已被其他操作修改，请刷新后重试。',
-          'Channel configuration changed. Refresh before saving.',
-        ),
-      )
-    const attrs = { ...latest.attributes }
-    if (attrs.metadata)
-      attrs.metadata = { ...attrs.metadata, background: background.value, partitions: areas.value }
-    else Object.assign(attrs, { background: background.value, partitions: areas.value })
-    original = await runOperation('updateResource', {
-      id: channel.value,
-      input: { attributes: attrs },
+    const saved = await saveGroupMap(original.value, String(route.params.id), {
+      background: background.value.trim(),
+      partitions: areas.value,
     })
-    notice.value = tr('底图与分区已保存。', 'Background and areas saved.')
+    if (seq !== generation) return
+    original.value = saved
+    background.value = groupMap(saved).background
+    notice.value = tr('底图与分区已保存到当前分组。', 'Background and areas saved to this group.')
   } catch (e) {
-    error.value = errorText(e)
+    if (seq === generation) error.value = errorText(e)
   } finally {
-    busy.value = false
+    if (seq === generation) busy.value = false
   }
 }
 watch(
   () => route.params.id,
   async (id) => {
-    channel.value = ''
+    const seq = ++workspaceGeneration
+    await load('')
+    pendingGroup.value = null
+    groups.value = []
+    busy.value = true
     try {
-      ;[channels.value, devices.value] = await Promise.all([
-        listAll('resources', { tenantId: id, kind: 'channel' }),
-        listAll('entities', { tenantId: id, kind: 'device' }),
-      ])
+      const rows = await listAll('objectGroups', { tenantId: String(id), deleted: 'live' })
+      if (seq === workspaceGeneration)
+        groups.value = rows.filter(
+          (g) => g.tenantId === String(id) && g.groupType === 'object' && !g.deletedAt,
+        )
     } catch (e) {
-      error.value = errorText(e)
+      if (seq === workspaceGeneration) error.value = errorText(e)
+    } finally {
+      if (seq === workspaceGeneration) busy.value = false
     }
   },
   { immediate: true },
 )
 </script>
 <style scoped>
+.map-editor {
+  min-width: 0;
+}
 .map-canvas {
   display: block;
   width: 100%;

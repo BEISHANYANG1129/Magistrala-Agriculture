@@ -5,19 +5,18 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { createSessionHandler } from '../magistrala-ui/server/session-server.mjs'
+import { createCameraGateway } from '../magistrala-ui/server/camera-gateway.mjs'
+import { agentOptions } from './agent-options.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dist = path.join(root,'magistrala-ui','dist')
 const session = await createSessionHandler()
+const camera = createCameraGateway()
 if (!fs.existsSync(path.join(dist,'index.html'))) throw new Error('Build the UI first: cd magistrala-ui && npm ci && npm run build')
 let agent
 if (process.env.AGRI_AGENT_BINARY) {
-  const directory=path.join(root,'llm','agentv2')
-  const state=process.env.AGRI_AGENT_STATE_DIR || path.join(directory,'runtime','agri-ui')
-  fs.mkdirSync(state,{recursive:true})
-  const registry=path.join(state,'registry.json')
-  if (!fs.existsSync(registry)) fs.copyFileSync(path.join(directory,'examples','empty-registry.json'),registry)
-  agent=spawn(process.env.AGRI_AGENT_BINARY,['-listen','127.0.0.1:9025','-platform-url',process.env.AGRI_ATOM_URL || 'http://127.0.0.1:8080','-mode','reader-demo','-reader',process.env.AGRI_READER_URL || 'http://127.0.0.1:9011','-time-unit','nanoseconds','-registry',registry,'-edit-regions','-state-dir',path.join(state,'history')],{cwd:directory,stdio:'inherit'})
+  const { directory, args } = agentOptions(root)
+  agent=spawn(process.env.AGRI_AGENT_BINARY,args,{cwd:directory,stdio:'inherit'})
   agent.on('error',error=>{console.error('Agent failed:',error.message);process.exit(1)})
   agent.on('exit',code=>{console.error('Agent stopped:',code);process.exit(code || 1)})
 }
@@ -26,7 +25,7 @@ const gateway=process.env.AGRI_GATEWAY_URL || 'http://127.0.0.1:80'
 const platform={rules:process.env.AGRI_RULES_URL || 'http://127.0.0.1:9008',alarms:process.env.AGRI_ALARMS_URL || 'http://127.0.0.1:8050',reports:process.env.AGRI_REPORTS_URL || 'http://127.0.0.1:9017',bootstrap:process.env.AGRI_BOOTSTRAP_URL || 'http://127.0.0.1:9010',readers:process.env.AGRI_READER_URL || 'http://127.0.0.1:9011',ui:process.env.AGRI_UI_BACKEND_URL || 'http://127.0.0.1:9097',http:gateway,certs:gateway,notifiers:process.env.AGRI_NOTIFIER_URL || 'http://127.0.0.1:9014'}
 function route(url) {
   const pathname=url.split('?')[0]
-  if (pathname==='/api/agent' || pathname.startsWith('/api/agent/')) return [process.env.AGRI_AGENT_URL || 'http://127.0.0.1:9025',url.slice('/api/agent'.length) || '/',true]
+  if (pathname==='/api/agent' || pathname.startsWith('/api/agent/')) return [process.env.AGRI_AGENT_URL || 'http://127.0.0.1:9026',url.slice('/api/agent'.length) || '/',true]
   for (const [name,target] of Object.entries(platform)) {
     const prefix=`/api/platform/${name}`
     if (pathname===prefix || pathname.startsWith(prefix+'/')) return [target,url.slice(prefix.length) || '/']
@@ -41,12 +40,16 @@ function proxy(req,res,[base,url,preserveHost]) {
   const target=new URL(base)
   const headers={...req.headers}
   delete headers.connection
-  if (!preserveHost) headers.host=target.host
+  headers.host=target.host
+  if (preserveHost && headers.origin !== undefined) {
+    const scheme=req.socket.encrypted || req.headers['x-forwarded-proto']==='https'?'https':'http'
+    headers.origin=headers.origin===`${scheme}://${req.headers.host}`?target.origin:'null'
+  }
   const upstream=(target.protocol==='https:'?https:http).request({hostname:target.hostname,port:target.port,protocol:target.protocol,method:req.method,path:(target.pathname==='/'?'':target.pathname)+url,headers},response=>{
     res.writeHead(response.statusCode,response.headers)
     response.pipe(res)
   })
-  upstream.setTimeout(155000,()=>upstream.destroy(new Error('Upstream timeout')))
+  upstream.setTimeout(preserveHost?625000:155000,()=>upstream.destroy(new Error('Upstream timeout')))
   upstream.on('error',()=>{if (!res.headersSent) res.writeHead(502,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Required backend is unavailable'}))})
   req.on('aborted',()=>upstream.destroy())
   req.pipe(upstream)
@@ -56,6 +59,7 @@ const server=http.createServer(async(req,res)=>{
   try {
     if (req.url==='/healthz') {res.writeHead(200,{'Content-Type':'application/json'});res.end('{"status":"ok"}');return}
     if (req.url==='/api/session' || req.url.startsWith('/api/session/') || req.url.startsWith('/api/session?')) {await session(req,res);return}
+    if (req.url.startsWith('/api/cameras/')) {await camera(req,res);return}
     const target=route(req.url)
     if (target) {proxy(req,res,target);return}
     if (req.url.startsWith('/api/')) {res.writeHead(404);res.end();return}

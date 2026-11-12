@@ -5,25 +5,25 @@ import vue from '@vitejs/plugin-vue'
 import vueJsx from '@vitejs/plugin-vue-jsx'
 import vueDevTools from 'vite-plugin-vue-devtools'
 import { sessionPlugin } from './server/session-server.mjs'
+import { cameraPlugin } from './server/camera-gateway.mjs'
+import { createAgentProxy } from './server/agent-proxy.mjs'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [sessionPlugin(), vue(), vueJsx(), vueDevTools()],
+  // Keep the running app's optimized dependencies separate from test servers.
+  cacheDir: 'node_modules/.vite-dev',
+  plugins: [sessionPlugin(), cameraPlugin(), vue(), vueJsx(), vueDevTools()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
   server: {
-    host: '127.0.0.1',
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: true,
     proxy: {
-      '/api/agent': {
-        target: process.env.AGRI_AGENT_URL || 'http://127.0.0.1:9025',
-        changeOrigin: false,
-        timeout: 155000,
-        proxyTimeout: 150000,
-        rewrite: (path) => path.replace(/^\/api\/agent/, ''),
-      },
+      '/api/agent': createAgentProxy(),
       ...Object.fromEntries(
         Object.entries({
           rules: 'http://127.0.0.1:9008',

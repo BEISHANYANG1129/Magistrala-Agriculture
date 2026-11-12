@@ -87,6 +87,7 @@ const tabLabel = computed(
       'role-management': tr('角色', 'Roles'),
       users: tr('成员', 'Members'),
       messages: tr('消息', 'Messages'),
+      video: tr('实时视频', 'Live video'),
       journals: tr('日志', 'Journals'),
       devices: tr('设备', 'Devices'),
       channels: tr('通道', 'Channels'),

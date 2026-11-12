@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"magistrala-agri-agent/workbench"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -45,6 +46,9 @@ func (p *PlatformAuth) query(ctx context.Context, auth, query string, variables 
 		return fmt.Errorf("platform unavailable: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return workbench.ErrQueryDenied
+	}
 	var result struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
@@ -77,26 +81,16 @@ func (p *PlatformAuth) authorize(ctx context.Context, auth, workspace string, ma
 	if !manage {
 		return nil
 	}
-	parts := strings.Split(strings.TrimPrefix(auth, "Bearer "), ".")
-	if len(parts) != 3 {
-		return fmt.Errorf("invalid session token")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	subject, err := sessionSubject(auth)
 	if err != nil {
-		return fmt.Errorf("invalid session token")
-	}
-	var claims struct {
-		Subject string `json:"sub"`
-	}
-	if json.Unmarshal(payload, &claims) != nil || claims.Subject == "" {
-		return fmt.Errorf("invalid session subject")
+		return err
 	}
 	var decision struct {
 		Check struct {
 			Allowed bool `json:"allowed"`
 		} `json:"authzCheck"`
 	}
-	input := map[string]any{"subjectId": claims.Subject, "action": "manage", "objectKind": "tenant", "objectId": workspace}
+	input := map[string]any{"subjectId": subject, "action": "manage", "objectKind": "tenant", "objectId": workspace}
 	if err = p.query(ctx, auth, "mutation($input:AuthzCheckInput!){authzCheck(input:$input){allowed}}", map[string]any{"input": input}, &decision); err != nil {
 		return err
 	}
@@ -104,6 +98,24 @@ func (p *PlatformAuth) authorize(ctx context.Context, auth, workspace string, ma
 		return fmt.Errorf("workspace management permission required")
 	}
 	return nil
+}
+
+func sessionSubject(auth string) (string, error) {
+	parts := strings.Split(strings.TrimPrefix(auth, "Bearer "), ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid session token")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("invalid session token")
+	}
+	var claims struct {
+		Subject string `json:"sub"`
+	}
+	if json.Unmarshal(payload, &claims) != nil || claims.Subject == "" {
+		return "", fmt.Errorf("invalid session subject")
+	}
+	return claims.Subject, nil
 }
 func requestWorkspace(ctx context.Context) string {
 	s, _ := ctx.Value(workspaceContext).(string)
@@ -128,7 +140,7 @@ func (p *PlatformAuth) validateBindings(ctx context.Context, reg Registry) error
 					return fmt.Errorf("cannot verify sensor binding: %w", err)
 				}
 				if data[object.kind].TenantID != region.WorkspaceID {
-					return fmt.Errorf("sensor binding is outside workspace")
+					return fmt.Errorf("sensor binding is outside workspace: %w", workbench.ErrQueryDenied)
 				}
 			}
 		}
@@ -175,7 +187,13 @@ func (s *Server) authenticated(next http.Handler) http.Handler {
 			fail(w, 401, fmt.Errorf("login required"))
 			return
 		}
-		if err := s.Platform.authorize(r.Context(), auth, workspace, r.Method != "GET"); err != nil {
+		// Analysis POSTs are read-only with respect to platform/device resources.
+		manage := r.Method != "GET"
+		if r.Method == "POST" && (r.URL.Path == "/v2/workbench/query" || r.URL.Path == "/v2/workbench/runs" || r.URL.Path == "/v2/workbench/chat" ||
+			r.URL.Path == "/v2/workbench/automation" || (strings.HasPrefix(r.URL.Path, "/v2/workbench/automation/") && (strings.HasSuffix(r.URL.Path, "/resume") || strings.HasSuffix(r.URL.Path, "/camera/confirm") || strings.HasSuffix(r.URL.Path, "/camera/stop")))) {
+			manage = false
+		}
+		if err := s.Platform.authorize(r.Context(), auth, workspace, manage); err != nil {
 			fail(w, 403, err)
 			return
 		}

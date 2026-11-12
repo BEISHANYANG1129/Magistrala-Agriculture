@@ -259,7 +259,11 @@ async function save() {
     if (!meta || Array.isArray(meta) || typeof meta !== 'object')
       throw new Error(tr('元数据必须是对象。', 'Metadata must be an object.'))
     const latest = props.record.id ? await request(url) : {}
-    const merged = editedMetadata(props.record.metadata, meta, latest.metadata)
+    // Imported drafts already contain their initial metadata. They have no
+    // persisted baseline, so creation must retain every imported key.
+    const merged = props.record.id
+      ? editedMetadata(props.record.metadata, meta, latest.metadata)
+      : meta
     let body
     if (props.section === 'alarms')
       body = {

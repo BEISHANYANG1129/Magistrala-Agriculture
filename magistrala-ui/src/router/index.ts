@@ -19,9 +19,9 @@ const router = createRouter({
         { path: '', redirect: (to) => `/domain/${to.params.id}/home` },
         { path: 'home', component: OverviewPage },
         { path: 'agent', component: () => import('../components/AgentWorkbench.vue') },
-        { path: 'field-map', component: () => import('../components/FieldMap.vue') },
+        { path: 'field-map', redirect: (to) => `/domain/${to.params.id}/groups` },
         { path: 'messages', component: () => import('../components/MessagesPage.vue') },
-        { path: 'agri-integration', component: () => import('../components/IntegrationPage.vue') },
+        { path: 'agri-integration', redirect: (to) => `/domain/${to.params.id}/agent` },
         {
           path: ':section(devices|gateways|channels|groups)/:recordId?/:tab?',
           component: () => import('../components/ResourcePage.vue'),

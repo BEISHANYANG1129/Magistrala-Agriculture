@@ -1,0 +1,20 @@
+// Deployment helper for the already registered device. Never touches credentials
+// on the device or its network configuration. Prints only public playback state.
+import { chromium } from '@playwright/test'
+import fs from 'node:fs/promises'
+const env=Object.fromEntries((await fs.readFile('D:/personal/magistrala/magistrala/docker/.env','utf8')).split(/\r?\n/).filter(line=>line.includes('=')&&!line.trim().startsWith('#')).map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1).trim().replace(/^['"]|['"]$/g,'')]}))
+const action=process.argv[2]
+if(!['start','stop','status','ui','cancel-task','history'].includes(action))throw new Error('Choose start, stop or status')
+const browser=await chromium.launch({headless:true,channel:'msedge'})
+try{
+ const page=await browser.newPage({viewport:{width:1600,height:1100}});await page.goto('http://127.0.0.1:5173/login');await page.getByLabel('邮箱或用户名').fill(env.ATOM_ADMIN_USERNAME);await page.getByLabel('密码',{exact:true}).fill(env.ATOM_ADMIN_SECRET);await page.getByRole('button',{name:'登录',exact:true}).click();await page.waitForURL('**/domains')
+ if(action==='history'){
+ const id=process.argv[3];if(!/^[a-f0-9]{32}$/.test(id||''))throw new Error('Invalid task ID')
+ const saved=await page.evaluate(async id=>{const {request}=await import('/src/api/platform.js');const headers={'X-Workspace-ID':'a14a9eeb-da40-4f82-babe-aa3a5204ecbe'};const detail=await request('/api/agent/v2/workbench/automation/'+id,{headers});const cap=detail.task.automation.camera.captures[0];const image=await request('/api/agent/v2/workbench/automation/'+id+'/camera/captures/'+cap.id,{headers});return {status:detail.task.status,captures:detail.task.automation.camera.captures.length,reports:detail.reports.length,image_bytes:image.image?.length,question:detail.task.question}},id)
+ if(saved.status!=='completed'||saved.captures!==1||saved.reports!==1||saved.image_bytes<1000)throw new Error('Saved task, capture or report did not survive restart')
+ await page.goto('http://127.0.0.1:5173/domain/a14a9eeb-da40-4f82-babe-aa3a5204ecbe/agent');await page.getByText('服务已连接',{exact:true}).waitFor();await page.getByRole('button',{name:'自动化任务',exact:true}).click();await page.getByRole('button',{name:'查看截图',exact:true}).first().click();await page.locator('.camera-task img').waitFor();await page.screenshot({path:'D:/personal/magistrala/output/multi-agent-rebuild/implementation/camera-verified-completed-20261111.png',fullPage:true});await fs.writeFile('D:/personal/magistrala/output/multi-agent-rebuild/implementation/camera-history-check.json',JSON.stringify({checked_at:new Date().toISOString(),task_id:id,passed:true,...saved},null,2));console.log('Saved task, image and report verified after restart',id)
+ }else if(action==='cancel-task'){const id=process.argv[3];if(!/^[a-f0-9]{32}$/.test(id||''))throw new Error('Invalid task ID');await page.evaluate(async id=>{const {request}=await import('/src/api/platform.js');return request('/api/agent/v2/workbench/automation/'+id+'/camera/stop',{method:'POST',body:{},headers:{'X-Workspace-ID':'a14a9eeb-da40-4f82-babe-aa3a5204ecbe'}})},id);console.log('Cancelled test plan',id)}else if(action==='ui'){await page.goto('http://127.0.0.1:5173/domain/a14a9eeb-da40-4f82-babe-aa3a5204ecbe/agent');await page.getByText('服务已连接',{exact:true}).waitFor();await page.getByRole('button',{name:'自动化任务',exact:true}).click();await page.getByText('已接入摄像头任务',{exact:true}).waitFor();await page.screenshot({path:'D:/personal/magistrala/output/multi-agent-rebuild/implementation/camera-workbench-live.png',fullPage:true});console.log('Workbench camera entry verified');}else{
+ const result=await page.evaluate(async action=>{const {request}=await import('/src/api/platform.js');return request('/api/cameras/a14a9eeb-da40-4f82-babe-aa3a5204ecbe/b6d1c497-3e75-43af-8ab6-6ba723290e2d/'+(action==='status'?'status':'playback/'+action),{method:action==='status'?'GET':'POST'})},action)
+ console.log(JSON.stringify({state:result.state,enabled:result.enabled,generation:result.generation}))
+ }
+}finally{await browser.close()}

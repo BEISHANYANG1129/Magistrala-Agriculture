@@ -413,7 +413,7 @@ export const sections = [
   ['users', '工作区成员', 'Members'],
   ['role-management', '角色与权限', 'Roles & permissions'],
   ['invitations', '邀请', 'Invitations'],
-  ['agent', '区域与智能分析', 'Regions & AI'],
+  ['agent', '智能工作台', 'Intelligent workbench'],
   ['agri-integration', '农业数据集成', 'Agricultural integration'],
   ['field-map', '农田分区与位置', 'Field map & locations'],
   ['account', '账户与令牌', 'Account & tokens'],

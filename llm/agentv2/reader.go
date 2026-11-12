@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"magistrala-agri-agent/workbench"
 	"math"
 	"net/http"
 	"net/url"
@@ -24,6 +25,8 @@ type Reader struct {
 	Client        *http.Client
 	PageSize      int
 	MaxPages      int
+	Metric        string
+	Until         time.Time // Optional bounded query; zero preserves legacy behavior.
 }
 type readerMessage struct {
 	Channel   string      `json:"channel"`
@@ -38,18 +41,26 @@ type readerPage struct {
 	Messages []readerMessage `json:"messages"`
 }
 
-func (r *Reader) Read(ctx context.Context, workspace string, binding Binding, since time.Time) ([]Evidence, error) {
-	if r.TimeUnit != "seconds" && r.TimeUnit != "nanoseconds" {
-		return nil, errors.New("reader time_unit must be seconds or nanoseconds")
-	}
+func (r *Reader) messageURL(workspace, channel string) (*url.URL, error) {
 	u, err := url.Parse(r.BaseURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, errors.New("invalid reader base URL")
 	}
 	// Build escaped segments explicitly; identifiers cannot inject query/path components.
 	basePath := u.EscapedPath()
-	u.Path = strings.TrimRight(u.Path, "/") + "/" + workspace + "/channels/" + binding.ChannelID + "/messages"
-	u.RawPath = strings.TrimRight(basePath, "/") + "/" + url.PathEscape(workspace) + "/channels/" + url.PathEscape(binding.ChannelID) + "/messages"
+	u.Path = strings.TrimRight(u.Path, "/") + "/" + workspace + "/channels/" + channel + "/messages"
+	u.RawPath = strings.TrimRight(basePath, "/") + "/" + url.PathEscape(workspace) + "/channels/" + url.PathEscape(channel) + "/messages"
+	return u, nil
+}
+
+func (r *Reader) Read(ctx context.Context, workspace string, binding Binding, since time.Time) ([]Evidence, error) {
+	if r.TimeUnit != "seconds" && r.TimeUnit != "nanoseconds" {
+		return nil, errors.New("reader time_unit must be seconds or nanoseconds")
+	}
+	u, err := r.messageURL(workspace, binding.ChannelID)
+	if err != nil {
+		return nil, err
+	}
 	client := r.Client
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -71,6 +82,12 @@ func (r *Reader) Read(ctx context.Context, workspace string, binding Binding, si
 		q.Set("order", "time")
 		q.Set("dir", "desc")
 		q.Set("format", "messages")
+		if r.Metric != "" {
+			q.Set("name", r.Metric)
+		}
+		if !r.Until.IsZero() {
+			setMessageWindow(q, since, r.Until, r.TimeUnit)
+		}
 		u.RawQuery = q.Encode()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
@@ -86,6 +103,9 @@ func (r *Reader) Read(ctx context.Context, workspace string, binding Binding, si
 		if readErr != nil {
 			return nil, readErr
 		}
+		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+			return nil, workbench.ErrQueryDenied
+		}
 		if res.StatusCode != 200 {
 			return nil, fmt.Errorf("reader returned HTTP %d", res.StatusCode)
 		}
@@ -98,7 +118,7 @@ func (r *Reader) Read(ctx context.Context, workspace string, binding Binding, si
 		}
 		for _, m := range p.Messages {
 			// Never rely solely on remote filters for workspace/region isolation.
-			if m.Publisher != binding.PublisherID || (m.Channel != "" && m.Channel != binding.ChannelID) {
+			if m.Publisher != binding.PublisherID || (m.Channel != "" && m.Channel != binding.ChannelID) || (r.Metric != "" && m.Name != r.Metric) {
 				continue
 			}
 			if m.Value == nil || math.IsNaN(*m.Value) || math.IsInf(*m.Value, 0) {
@@ -111,6 +131,9 @@ func (r *Reader) Read(ctx context.Context, workspace string, binding Binding, si
 			if observed.Before(since) {
 				continue
 			}
+			if !r.Until.IsZero() && !observed.Before(r.Until) {
+				continue
+			}
 			identity, _ := json.Marshal([]string{workspace, binding.ChannelID, m.Publisher, m.Name, m.Time.String()})
 			id := sha256.Sum256(identity)
 			out = append(out, Evidence{ID: hex.EncodeToString(id[:]), ChannelID: binding.ChannelID, PublisherID: m.Publisher, Metric: m.Name, Value: *m.Value, Unit: m.Unit, ObservedAt: observed})
@@ -119,7 +142,7 @@ func (r *Reader) Read(ctx context.Context, workspace string, binding Binding, si
 			return out, nil
 		}
 	}
-	return nil, errors.New("reader pagination limit exceeded; refusing incomplete evidence")
+	return nil, fmt.Errorf("reader pagination limit exceeded; refusing incomplete evidence: %w", workbench.ErrQueryLimit)
 }
 func parseTimestamp(n json.Number, unit string) (time.Time, error) {
 	if unit == "nanoseconds" {
@@ -135,4 +158,14 @@ func parseTimestamp(n json.Number, unit string) (time.Time, error) {
 	}
 	seconds, fraction := math.Modf(v)
 	return time.Unix(int64(seconds), int64(fraction*1e9)).UTC(), nil
+}
+
+func setMessageWindow(q url.Values, start, end time.Time, unit string) {
+	if unit == "nanoseconds" {
+		q.Set("from", strconv.FormatInt(start.UnixNano(), 10))
+		q.Set("to", strconv.FormatInt(end.UnixNano(), 10))
+		return
+	}
+	q.Set("from", strconv.FormatFloat(float64(start.UnixNano())/1e9, 'f', -1, 64))
+	q.Set("to", strconv.FormatFloat(float64(end.UnixNano())/1e9, 'f', -1, 64))
 }

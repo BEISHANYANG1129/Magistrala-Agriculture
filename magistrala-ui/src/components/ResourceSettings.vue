@@ -39,7 +39,7 @@
         <strong>ID</strong><span class="mono">{{ record.id }}</span
         ><button class="quiet" @click="copy(record.id)">{{ tr('复制', 'Copy') }}</button>
       </div>
-      <div v-if="isDevice" class="setting-row">
+      <div v-if="isDevice && !cameraConfig(record)" class="setting-row">
         <strong>{{ tr('设备密钥', 'Device key') }}</strong
         ><span class="mono">{{ secret || '••••••••••••' }}</span
         ><button class="quiet" :disabled="busy" @click="reveal">
@@ -256,6 +256,7 @@
   </div>
 </template>
 <script setup>
+import { cameraConfig } from '../api/camera'
 import ModalDialog from './ModalDialog.vue'
 import ResourceGeometry from './ResourceGeometry.vue'
 import { ref, computed, watch } from 'vue'

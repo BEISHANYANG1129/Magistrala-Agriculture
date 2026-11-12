@@ -8,6 +8,7 @@ tmp/
 *.exe
 *.log
 __pycache__/
+*.py[cod]
 **/test_uploads/
 llm/agentv2/runtime/
 llm/agentv2/bin/

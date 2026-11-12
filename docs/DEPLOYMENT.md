@@ -37,7 +37,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header Origin $http_origin;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 160s;
+        proxy_read_timeout 625s;
     }
 }
 ```
@@ -55,7 +55,7 @@ server {
 | `AGRI_HOST` / `AGRI_PORT` | `127.0.0.1` / `5173` | Node 页面服务监听地址和端口 |
 | `AGRI_ATOM_URL` | `http://127.0.0.1:80` | 登录与 GraphQL 服务 |
 | `AGRI_GATEWAY_URL` | `http://127.0.0.1:80` | 消息／证书网关 |
-| `AGRI_AGENT_URL` | `http://127.0.0.1:9025` | 区域工作台 |
+| `AGRI_AGENT_URL` | `http://127.0.0.1:9026` | 智能工作台 |
 | `AGRI_READER_URL` | `http://127.0.0.1:9011` | Reader 查询 |
 | `AGRI_BOOTSTRAP_URL` | `http://127.0.0.1:9010` | 宿主机 Bootstrap 入口；容器内端口是 9013 |
 | `AGRI_RULES_URL` / `AGRI_ALARMS_URL` / `AGRI_REPORTS_URL` | 本机 9008 / 8050 / 9017 | 各功能后端 |
@@ -63,7 +63,7 @@ server {
 | `AGRI_SESSION_DIR` | 系统用户数据目录 | 加密登录状态存放位置 |
 | `AGRI_COOKIE_SECURE` | `false` | HTTPS 环境设置 `true` |
 
-区域服务的默认模式为 `reader-demo`，只读实时数据并返回模拟建议和执行回执。Docker 中的 Node 服务会启动容器内区域二进制，两个进程共享容器但区域端口只监听 loopback；外部请求通过 `/api/agent` 访问，保留 Host/Origin 检查。区域服务退出时整个应用容器退出并由 Compose 重启。
+Docker 中的 Node 服务会启动容器内工作台二进制，两个进程共享容器，工作台仅监听 `127.0.0.1:9026`；外部请求通过 `/api/agent` 访问。代理转换同源 Origin 和 Host，外部来源仍被拒绝，后端继续核验令牌与工作区。工作台服务退出时整个应用容器退出并由 Compose 重启。默认 `AGRI_WORKBENCH_PREVIEW=1`，不调用模型；启用模型分析前需配置 Ollama、Python、GPU 检查和自己的来源登记。工作台环境变量与摄像头接入边界见主 README。
 
 ## 常见问题
 

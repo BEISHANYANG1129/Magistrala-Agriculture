@@ -1,0 +1,81 @@
+flowchart TD
+    accTitle: 问答助手运行流程（当前实现）
+    accDescr: 从用户问题、认证与共享锁，到时间解析、查询规划、平台读取、资料检索、回答复核和会话保存的完整流程。
+
+    A(["用户提问或继续追问"])
+    B["后端：校验登录、工作空间和会话归属"]
+    C{"共享执行锁是否可用？"}
+    BUSY["返回 429<br/>提示已有任务运行，请稍后重试"]
+    LOCK["占用本次执行锁"]
+
+    TIME["本地时间组件：解析日期和时段"]
+    TIMEOK{"时间组件是否可用？"}
+    TIMEERR["返回：时间解析组件不可用"]
+
+    CTX["后端：结合历史查询条件理解追问<br/>保留或修改日期、指标、设备"]
+    CATALOG[("当前账号可见的数据目录<br/>指标、别名、单位、质量规则、设备")]
+    PLAN["形成查询计划<br/>明确的目录请求和短追问按规则处理<br/>其他问题由模型规划"]
+
+    NEED{"是否需要查询平台？"}
+    VALID["后端：校验查询条件和权限<br/>时间范围、指标准入、设备与通道归属"]
+    CHECK{"校验结果"}
+    ASK["追问缺少的必要条件<br/>保存待补查询条件"]
+    DENY["说明权限不足、指标不可用<br/>或查询范围超限"]
+
+    READ["后端：调用平台只读接口<br/>读取观测、告警或设备信息"]
+    STATS["后端：检查单位和质量、计算统计<br/>分别保存每个指标与时段的证据"]
+
+    RAG["文本 RAG：检索相关项目资料<br/>保留来源与版本"]
+    TYPE{"本轮采用哪种回答方式？"}
+
+    DIRECT["程序直接回答<br/>数据目录、单项数值<br/>或合并后的无数据说明"]
+    TEXT["模型：回答常识或相关资料问题"]
+
+    FACTS["后端：提供可引用的事实<br/>数值、日期、覆盖范围、比较差值"]
+    ANALYZE["模型：根据证据组织综合回答<br/>必要时提出补查"]
+    MORE{"是否需要且允许补查？"}
+    EXTRA["后端：校验并执行补查<br/>继承原设备、模式和时间范围"]
+
+    VERIFY["程序：核对事实引用和来源<br/>必要时由模型逐条复核"]
+    PASS{"是否有通过核对的陈述？"}
+    APPROVED["发布通过核对的回答"]
+    FALLBACK["保留程序核实的查询结果<br/>必要时补上已计算的比较结论<br/>没有可靠依据时明确说明"]
+
+    OUT["界面展示回答与关键限制<br/>详细统计和来源放入“查看依据”"]
+    SAVE["保存会话、查询条件和证据"]
+    RELEASE["释放本次执行锁"]
+    END(["本次请求结束"])
+
+    A --> B --> C
+    C -->|"不可用"| BUSY --> END
+    C -->|"可用"| LOCK --> TIME --> TIMEOK
+    TIMEOK -->|"不可用"| TIMEERR --> OUT
+    TIMEOK -->|"可用"| CTX --> PLAN
+    CATALOG -.->|"提供查询语义"| PLAN
+    PLAN --> NEED
+    NEED -->|"需要"| VALID --> CHECK
+    CHECK -->|"缺少必要条件"| ASK --> OUT
+    CHECK -->|"不允许查询"| DENY --> OUT
+    CHECK -->|"通过"| READ --> STATS --> RAG
+    NEED -->|"无需查询"| RAG
+    RAG --> TYPE
+    TYPE -->|"已有可直接给出的结果"| DIRECT --> OUT
+    TYPE -->|"常识或资料问答"| TEXT --> VERIFY
+    TYPE -->|"综合分析或日期比较"| FACTS --> ANALYZE --> MORE
+    MORE -->|"是：最多一轮"| EXTRA --> FACTS
+    MORE -->|"否或已达上限"| VERIFY
+    VERIFY --> PASS
+    PASS -->|"有"| APPROVED --> OUT
+    PASS -->|"没有或生成失败"| FALLBACK --> OUT
+    OUT --> SAVE --> RELEASE --> END
+
+    classDef backend fill:#eff6ff,stroke:#7f9fc3,color:#163652,stroke-width:1.3px;
+    classDef model fill:#edf7f0,stroke:#7fa78d,color:#214a34,stroke-width:1.3px;
+    classDef decision fill:#fff8e7,stroke:#b8a16e,color:#574723,stroke-width:1.3px;
+    classDef notice fill:#fff0ef,stroke:#c69b96,color:#723c37,stroke-width:1.3px;
+    classDef output fill:#f2eff8,stroke:#a497bb,color:#493f61,stroke-width:1.3px;
+    class B,LOCK,TIME,CTX,CATALOG,VALID,READ,STATS,RAG,FACTS,EXTRA,SAVE,RELEASE backend;
+    class PLAN,TEXT,ANALYZE,VERIFY model;
+    class C,TIMEOK,NEED,CHECK,TYPE,MORE,PASS decision;
+    class BUSY,TIMEERR,ASK,DENY,FALLBACK notice;
+    class A,DIRECT,APPROVED,OUT,END output;

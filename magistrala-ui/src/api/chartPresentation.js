@@ -41,6 +41,7 @@ export function chartOptions(widget, rows, size = {}) {
   const chart = widget.chart || {},
     type = chart.chartType,
     groups = telemetrySeries(rows)
+  if (chart.presentation === 'weather' || type === 'compass_chart') return weatherOptions(widget, rows, groups)
   const base = {
     tooltip: { trigger: 'axis', renderMode: 'richText' },
     legend: { type: 'scroll', bottom: 0 },
@@ -130,4 +131,66 @@ export function chartOptions(widget, rows, size = {}) {
       tooltip: { valueFormatter: (value) => `${value}${s.unit ? ' ' + s.unit : ''}` },
     })),
   }
+}
+
+function weatherOptions(widget, rows, groups) {
+  const c = widget.chart, latest = rows.find((r) => Number.isFinite(r.value))
+  const ink = '#263c46', muted = '#81909a', line = '#eaf0ef'
+  if (c.chartType === 'compass_chart') {
+    return {
+      animationDuration: 500,
+      series: [{ type: 'gauge', min: 0, max: 360, startAngle: 90, endAngle: -270,
+        center: ['50%', '48%'], radius: '76%', splitNumber: 8,
+        axisLine: { lineStyle: { width: 12, color: [[1, '#edf4f2']] } },
+        axisTick: { show: false }, splitLine: { length: 12, distance: -13, lineStyle: { color: '#b7cbc5', width: 1 } },
+        axisLabel: { distance: 20, color: muted, fontSize: 12,
+          formatter: (v) => ({ 0: '北 N', 90: '东 E', 180: '南 S', 270: '西 W' }[v] || '') },
+        pointer: { show: !!latest, length: '63%', width: 5, itemStyle: { color: '#208b77' } },
+        anchor: { show: true, size: 12, itemStyle: { color: '#208b77', borderColor: '#fff', borderWidth: 3 } },
+        title: { show: false }, detail: { offsetCenter: [0, '74%'], fontSize: 23, fontWeight: 600, color: ink,
+          formatter: () => latest ? `${latest.value}°` : '暂无近期数据' },
+        data: [{ value: latest?.value ?? null }],
+      }],
+    }
+  }
+  const bound = (name) => Number.isFinite(c[name]) ? c[name] : undefined
+  return {
+    animationDuration: 450, color: groups.map((s) => s.color || '#208b77'),
+    textStyle: { fontFamily: 'Microsoft YaHei, sans-serif', color: muted, fontSize: 11 },
+    tooltip: { trigger: 'axis', renderMode: 'richText', backgroundColor: '#fff', borderColor: '#dce9e4',
+      padding: [12, 16], textStyle: { color: ink }, axisPointer: { type: 'line', lineStyle: { color: '#b7cbc5', type: 'dashed' } } },
+    legend: { show: groups.length > 1, bottom: 0, left: 14, icon: 'roundRect', itemWidth: 14, itemHeight: 3,
+      textStyle: { color: muted, fontSize: 11 } },
+    grid: { left: 12, right: 18, top: 30, bottom: groups.length > 1 ? 38 : 14, containLabel: true },
+    xAxis: { type: 'time', axisLine: { lineStyle: { color: line } }, axisTick: { show: false },
+      splitLine: { show: false }, axisLabel: { color: muted, hideOverlap: true, margin: 12,
+        formatter: (v) => new Date(v).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) } },
+    yAxis: { type: 'value', name: c.yLabel || '', nameTextStyle: { color: muted, padding: [0, 0, 0, 12] },
+      min: bound('min'), max: bound('max'), scale: c.scale === true, minInterval: c.minInterval,
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: muted, hideOverlap: true }, splitLine: { lineStyle: { color: line, type: 'dashed' } } },
+    series: groups.map((s, i) => ({ name: s.name, type: 'line', data: weatherPoints(s.data, c.gapSeconds || 90),
+      smooth: false, showSymbol: false, connectNulls: false, sampling: 'lttb',
+      itemStyle: { color: s.color }, lineStyle: { color: s.color, width: i ? 2 : 2.5, type: i ? 'dashed' : 'solid' },
+      areaStyle: c.chartType === 'area_chart' ? { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+        colorStops: [{ offset: 0, color: s.color || '#208b77' }, { offset: 1, color: '#ffffff' }] }, opacity: 0.18 } : undefined,
+      tooltip: { valueFormatter: (v) => v == null ? '数据中断' : `${v}${s.unit ? ' ' + s.unit : ''}` },
+      markLine: i === 0 && Number.isFinite(c.referenceValue) ? { silent: true, symbol: 'none',
+        lineStyle: { color: '#c19a5c', type: 'dashed', width: 1 },
+        label: { formatter: c.referenceLabel || String(c.referenceValue), color: '#a1814c', position: 'insideEndTop', fontSize: 10 },
+        data: [{ yAxis: c.referenceValue }] } : undefined,
+    })),
+  }
+}
+
+// A missing reporting interval must not become an invented continuous curve.
+export function weatherPoints(points, gapSeconds = 90) {
+  const result = []
+  for (const point of points) {
+    const previous = result.at(-1)
+    if (previous && point[0] - previous[0] > gapSeconds * 1000)
+      result.push([previous[0] + 1, null])
+    result.push(point)
+  }
+  return result
 }
